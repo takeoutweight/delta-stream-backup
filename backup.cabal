@@ -20,6 +20,7 @@ library
                      , bytestring
                      , cryptonite
                      , foldl
+--                     , hOpenPGP
                      , turtle
   default-language:    Haskell2010
 
