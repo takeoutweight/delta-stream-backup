@@ -46,11 +46,8 @@ filterRegularFiles fns = do
 -- in binary (note that select here will interpret literal strings as binary, so no newline)
 -- TB.output "/tmp/gpg-tests/encrypt-binary" testBinary
 -- fold testBinary shasum
-testBinary =
-  (TB.inproc
-     "gpg"
-     ["-r", "Nathan Sorenson (SFU)", "--encrypt"]
-     (select ["hello"]))
+encrypt :: Shell BS.ByteString -> Shell BS.ByteString
+encrypt bs = (TB.inproc "gpg" ["-r", "Nathan Sorenson (SFU)", "--encrypt"] bs)
 
 -- | A FoldM that appends ByteStrings to a file handle.
 appendFold :: MonadIO io => Handle -> FoldM io BS.ByteString ()
@@ -62,7 +59,7 @@ appendFold handle =
     (return ())
     (\_ -> return ())
 
--- outputWithChecksum "/tmp/gpg-tests/out-with-check.gpg" testBinary
+-- outputWithChecksum "/tmp/gpg-tests/out-with-check.gpg" (encrypt (TB.input "/tmp/gpg-tests/plain"))
 -- | Write the Shell ByteString to a file and return the checksum, in a single pass.
 outputWithChecksum ::
      MonadIO io => FilePath -> Shell BS.ByteString -> io (CH.Digest CHA.SHA1)
