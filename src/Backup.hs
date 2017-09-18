@@ -52,43 +52,25 @@ testBinary =
      ["-r", "Nathan Sorenson (SFU)", "--encrypt"]
      (select ["hello"]))
 
--- TODO Pipe through gpg, and incrementally build the post-compression shasum (w/o loading in memory)
--- folds can be paired with ((,) <$> Fold.minimum <*> Fold.maximum)
--- can writeonly/appendonly to a handle or append to a filepath -- not sure the benefits?
--- maybe generalize w/ :t
-appendFold :: MM.MonadManaged m => FilePath -> FoldM m BS.ByteString ()
-appendFold fp =
-  F.FoldM
-    (\h bs -> do
-       liftIO (BS.hPut h bs)
-       return h)
-    (writeonly fp)
-    (\h -> return ())
-
--- liftIO wants IO, not MonadManaged m. So trying this?
-appendFold2 handle =
+-- | A FoldM that appends ByteStrings to a file handle.
+appendFold :: MonadIO io => Handle -> FoldM io BS.ByteString ()
+appendFold handle =
   F.FoldM
     (\_ bs -> do
-        liftIO (BS.hPut handle bs)
-        return ())
+       liftIO (BS.hPut handle bs)
+       return ())
     (return ())
     (\_ -> return ())
 
--- Q: Any kind of "runManaged" fold? Where we 
-
--- writeAndChecksum ::
---      MM.MonadManaged m
---   => FilePath
---   -> FoldM m BS.ByteString (CH.Digest CHA.SHA1, ())
-writeAndChecksum fp = (appendFold fp) *> F.generalize shasum
-
-writeAndChecksum2
-  :: MonadIO m =>
-     Handle -> FoldM m BS.ByteString (CH.Digest CHA.SHA1)
-writeAndChecksum2 handle = (appendFold2 handle) *> F.generalize shasum
-
--- Is this what I mean?
--- view (do h <- (writeonly "/tmp/append2.gpg"); foldIO testBinary (writeAndChecksum2 h))
+-- outputWithChecksum "/tmp/gpg-tests/out-with-check.gpg" testBinary
+-- | Write the Shell ByteString to a file and return the checksum, in a single pass.
+outputWithChecksum ::
+     MonadIO io => FilePath -> Shell BS.ByteString -> io (CH.Digest CHA.SHA1)
+outputWithChecksum fp bs =
+  liftIO
+    (MM.with
+       (writeonly fp)
+       (\h -> foldIO bs ((appendFold h) *> F.generalize shasum)))
 
 -- ascii armour'd:
 -- stdout $ (inproc "gpg" ["-a", "-r", "Nathan Sorenson (SFU)", "--encrypt"] (select ["hello"]))
