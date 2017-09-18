@@ -20,6 +20,7 @@
 resolver: lts-9.4
 
 # this one has hOpenPGP in the resolver. Is it better to use newest lts and extra-deps or older resolver?
+# this one also uses an older product-profunctors for opaleye, but intero broke
 # resolver: lts-8.24
 
 # User packages to be built.
@@ -42,6 +43,13 @@ resolver: lts-9.4
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - '.'
+# - location:
+#    git: https://github.com/tomjaguarpaw/haskell-opaleye
+#    commit: 57b4118f17b5f4a723be4cea344e6fd1e650b2aa
+#   extra-dep: true
+#   subdirs:
+#   - opaleye-sqlite
+
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 # extra-deps: [hOpenPGP-2.5.5, bzlib-0.5.0.5, nettle-0.2.0]

@@ -10,6 +10,9 @@ import qualified Control.Monad.Managed as MM
 import qualified Crypto.Hash as CH
 import qualified Crypto.Hash.Algorithms as CHA
 import qualified Data.ByteString as BS
+import qualified Data.Text as T
+import qualified Database.SQLite.Simple as SQ
+import qualified Database.SQLite.Simple.FromRow as SQS
 import Prelude hiding (FilePath, head)
 import qualified System.IO.Error as IOE
 import Turtle
@@ -68,6 +71,23 @@ outputWithChecksum fp bs =
     (MM.with
        (writeonly fp)
        (\h -> foldIO bs ((appendFold h) *> F.generalize shasum)))
+
+-- Testin sqlite
+
+data TestField = TestField Int T.Text deriving (Show)
+
+instance SQS.FromRow TestField where
+  fromRow = TestField <$> SQS.field <*> SQS.field
+
+instance SQ.ToRow TestField where
+  toRow (TestField id_ str) = SQ.toRow (id_, str)
+
+testdb = do
+  conn <- SQ.open "/tmp/gpg-tests/thedb.db"
+  SQ.execute_ conn "CREATE TABLE IF NOT EXISTS test (id INTEGER PRIMARY KEY, str TEXT)"
+  SQ.execute conn "INSERT INTO test (str) VALUES (?)" (SQ.Only ("test string 2" :: String))
+  SQ.execute conn "INSERT INTO test (id, str) VALUES (?,?)" (TestField 13 "test string 3")
+  return "OK"
 
 -- ascii armour'd:
 -- stdout $ (inproc "gpg" ["-a", "-r", "Nathan Sorenson (SFU)", "--encrypt"] (select ["hello"]))
