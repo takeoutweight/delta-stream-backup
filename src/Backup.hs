@@ -90,11 +90,16 @@ data FileEvent =
 
 
 fptotext fp = case (toText fp) of
-  Left a -> a
-  Right a -> a
+  Left s -> error ("Can't stringify path: " ++ (T.unpack s))
+  Right s -> s
 
 -- instance SQS.FromRow FileEvent where
---   fromRow = FileEvent <$> SQS.field <*> SQS.field
+--   fromRow = do
+--     (time, path, tag, mcs) <- ((,,,) <$> SQS.field <*> SQS.field <*> SQS.field <*> SQS.field) :: (DTC.UTCTime, T.Text, T.Text, Maybe T.Text) in
+--     case tag of
+--       "Add" -> FileEvent time (fromText fp) (FileAdd mcs)
+--       "Delete" -> FileEvent time (fromText fp) FileDelete
+--       _ -> errorsomehow
 
 instance SQ.ToRow FileEvent where
   toRow (FileEvent time path (FileAdd cs)) = SQ.toRow (time, fptotext path, "Add" :: T.Text, Just cs)
