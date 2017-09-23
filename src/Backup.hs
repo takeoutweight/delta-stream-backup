@@ -11,8 +11,10 @@ import qualified Crypto.Hash as CH
 import qualified Crypto.Hash.Algorithms as CHA
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
+import qualified Data.Time.Clock as DTC
 import qualified Database.SQLite.Simple as SQ
 import qualified Database.SQLite.Simple.FromRow as SQS
+import qualified Filesystem.Path.CurrentOS as FP
 import Prelude hiding (FilePath, head)
 import qualified System.IO.Error as IOE
 import Turtle
@@ -73,20 +75,40 @@ outputWithChecksum fp bs =
        (\h -> foldIO bs ((appendFold h) *> F.generalize shasum)))
 
 -- Testin sqlite
+type Checksum = T.Text
 
-data TestField = TestField Int T.Text deriving (Show)
+data FileEventType
+  = FileAdd Checksum
+  | FileDelete
+  deriving (Show)
 
-instance SQS.FromRow TestField where
-  fromRow = TestField <$> SQS.field <*> SQS.field
+data FileEvent =
+  FileEvent DTC.UTCTime
+            FilePath
+            FileEventType
+  deriving (Show)
 
-instance SQ.ToRow TestField where
-  toRow (TestField id_ str) = SQ.toRow (id_, str)
+
+fptotext fp = case (toText fp) of
+  Left a -> a
+  Right a -> a
+
+-- instance SQS.FromRow FileEvent where
+--   fromRow = FileEvent <$> SQS.field <*> SQS.field
+
+instance SQ.ToRow FileEvent where
+  toRow (FileEvent time path (FileAdd cs)) = SQ.toRow (time, fptotext path, "Add" :: T.Text, Just cs)
+  toRow (FileEvent time path FileDelete)   = SQ.toRow (time, fptotext path, "Delete" :: T.Text, Nothing :: Maybe T.Text)
 
 testdb = do
   conn <- SQ.open "/tmp/gpg-tests/thedb.db"
-  SQ.execute_ conn "CREATE TABLE IF NOT EXISTS test (id INTEGER PRIMARY KEY, str TEXT)"
-  SQ.execute conn "INSERT INTO test (str) VALUES (?)" (SQ.Only ("test string 2" :: String))
-  SQ.execute conn "INSERT INTO test (id, str) VALUES (?,?)" (TestField 13 "test string 3")
+  SQ.execute_ conn "CREATE TABLE IF NOT EXISTS main_file_events (id INTEGER PRIMARY KEY, time INTEGER, path TEXT, type TEXT, checksum TEXT)"
+  --  SQ.execute conn "INSERT INTO test (path, checksum) VALUES (?,?)" (SQ.Only ("test string 2" :: String))
+  path <- pwd
+  now <- DTC.getCurrentTime
+  SQ.execute conn "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)" (FileEvent now path (FileAdd "123"))
+  SQ.execute conn "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)" (FileEvent now path FileDelete)
+  SQ.close conn
   return "OK"
 
 -- ascii armour'd:

@@ -22,8 +22,10 @@ library
                      , text
                      , foldl
                      , managed
+                     , time
                      , turtle
                      , sqlite-simple
+                     , system-filepath
   default-language:    Haskell2010
 
 executable backup-exe
