@@ -117,14 +117,15 @@ instance SQ.ToRow FileEvent where
 
 testdb = do
   conn <- SQ.open "/tmp/gpg-tests/thedb.db"
-  SQ.execute_ conn "CREATE TABLE IF NOT EXISTS main_file_events (id INTEGER PRIMARY KEY, time INTEGER, path TEXT, type TEXT, checksum TEXT)"
+  SQ.execute_ conn "CREATE TABLE IF NOT EXISTS main_file_events (id INTEGER PRIMARY KEY, time TEXT, path TEXT, type TEXT, checksum TEXT)"
   --  SQ.execute conn "INSERT INTO test (path, checksum) VALUES (?,?)" (SQ.Only ("test string 2" :: String))
   path <- pwd
   now <- DTC.getCurrentTime
   SQ.execute conn "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)" (FileEvent now path (FileAdd "123"))
   SQ.execute conn "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)" (FileEvent now path FileDelete)
+  r <- SQ.query_ conn "SELECT time, path, type, checksum from main_file_events" :: IO [FileEvent]
   SQ.close conn
-  return "OK"
+  return (show r)
 
 -- ascii armour'd:
 -- stdout $ (inproc "gpg" ["-a", "-r", "Nathan Sorenson (SFU)", "--encrypt"] (select ["hello"]))
