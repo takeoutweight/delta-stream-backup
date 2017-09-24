@@ -23,6 +23,7 @@ library
                      , foldl
                      , managed
                      , time
+                     , transformers
                      , turtle
                      , sqlite-simple
                      , system-filepath

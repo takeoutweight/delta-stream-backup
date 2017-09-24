@@ -1,19 +1,25 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 module Backup where
 
-import Control.Exception
+import qualified Control.Exception as CE
 import qualified Control.Foldl as F
 import Control.Monad
 import qualified Control.Monad.Managed as MM
+import qualified Control.Monad.Trans.Class as MT
 import qualified Crypto.Hash as CH
 import qualified Crypto.Hash.Algorithms as CHA
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
+import qualified Data.Time as DT
 import qualified Data.Time.Clock as DTC
+import           Data.Typeable (Typeable, typeOf)
 import qualified Database.SQLite.Simple as SQ
 import qualified Database.SQLite.Simple.FromRow as SQS
+import qualified Database.SQLite.Simple.FromField as SQF
+import qualified Database.SQLite.Simple.Ok as SQOK
 import qualified Filesystem.Path.CurrentOS as FP
 import Prelude hiding (FilePath, head)
 import qualified System.IO.Error as IOE
@@ -93,13 +99,17 @@ fptotext fp = case (toText fp) of
   Left s -> error ("Can't stringify path: " ++ (T.unpack s))
   Right s -> s
 
--- instance SQS.FromRow FileEvent where
---   fromRow = do
---     (time, path, tag, mcs) <- ((,,,) <$> SQS.field <*> SQS.field <*> SQS.field <*> SQS.field) :: (DTC.UTCTime, T.Text, T.Text, Maybe T.Text) in
---     case tag of
---       "Add" -> FileEvent time (fromText fp) (FileAdd mcs)
---       "Delete" -> FileEvent time (fromText fp) FileDelete
---       _ -> errorsomehow
+data FileEventParseError = MismatchedTag deriving (Eq, Show, Typeable)
+
+instance CE.Exception FileEventParseError
+
+instance SQS.FromRow FileEvent where
+  fromRow = do
+    (time, path, tag, mcs) <- ((,,,) <$> SQS.field <*> SQS.field <*> SQS.field <*> SQS.field) :: SQS.RowParser (DTC.UTCTime, T.Text, T.Text, Maybe T.Text)
+    case (tag, mcs) of
+      ("Add", Just cs) -> return (FileEvent time (fromText path) (FileAdd cs))
+      ("Delete", Nothing) -> return (FileEvent time (fromText path) FileDelete)
+      _ -> error ("FileEvent row not correcntly stored: " ++ (show tag) ++ (show mcs)) -- (maybe we can't hook into the sql parser errors and have to do that elsewhere?) MT.lift (MT.lift (SQOK.Errors [CE.toException MismatchedTag]))
 
 instance SQ.ToRow FileEvent where
   toRow (FileEvent time path (FileAdd cs)) = SQ.toRow (time, fptotext path, "Add" :: T.Text, Just cs)
