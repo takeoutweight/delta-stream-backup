@@ -15,10 +15,10 @@ import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Data.Time as DT
 import qualified Data.Time.Clock as DTC
-import           Data.Typeable (Typeable, typeOf)
+import Data.Typeable (Typeable, typeOf)
 import qualified Database.SQLite.Simple as SQ
-import qualified Database.SQLite.Simple.FromRow as SQS
 import qualified Database.SQLite.Simple.FromField as SQF
+import qualified Database.SQLite.Simple.FromRow as SQS
 import qualified Database.SQLite.Simple.Ok as SQOK
 import qualified Filesystem.Path.CurrentOS as FP
 import Prelude hiding (FilePath, head)
@@ -80,7 +80,6 @@ outputWithChecksum fp bs =
        (writeonly fp)
        (\h -> foldIO bs ((appendFold h) *> F.generalize shasum)))
 
--- Testin sqlite
 type Checksum = T.Text
 
 data FileEventType
@@ -94,36 +93,55 @@ data FileEvent =
             FileEventType
   deriving (Show)
 
+fptotext fp =
+  case (toText fp) of
+    Left s -> error ("Can't stringify path: " ++ (T.unpack s))
+    Right s -> s
 
-fptotext fp = case (toText fp) of
-  Left s -> error ("Can't stringify path: " ++ (T.unpack s))
-  Right s -> s
-
-data FileEventParseError = MismatchedTag deriving (Eq, Show, Typeable)
+data FileEventParseError =
+  MismatchedTag
+  deriving (Eq, Show, Typeable)
 
 instance CE.Exception FileEventParseError
 
 instance SQS.FromRow FileEvent where
   fromRow = do
-    (time, path, tag, mcs) <- ((,,,) <$> SQS.field <*> SQS.field <*> SQS.field <*> SQS.field) :: SQS.RowParser (DTC.UTCTime, T.Text, T.Text, Maybe T.Text)
+    (time, path, tag, mcs) <-
+      ((,,,) <$> SQS.field <*> SQS.field <*> SQS.field <*> SQS.field) :: SQS.RowParser ( DTC.UTCTime
+                                                                                       , T.Text
+                                                                                       , T.Text
+                                                                                       , Maybe T.Text)
     case (tag, mcs) of
       ("Add", Just cs) -> return (FileEvent time (fromText path) (FileAdd cs))
       ("Delete", Nothing) -> return (FileEvent time (fromText path) FileDelete)
-      _ -> error ("FileEvent row not correcntly stored: " ++ (show tag) ++ (show mcs)) -- (maybe we can't hook into the sql parser errors and have to do that elsewhere?) MT.lift (MT.lift (SQOK.Errors [CE.toException MismatchedTag]))
+      _ ->
+        error
+          ("FileEvent row not correcntly stored: " ++ (show tag) ++ (show mcs)) -- (maybe we can't hook into the sql parser errors and have to do that elsewhere?) MT.lift (MT.lift (SQOK.Errors [CE.toException MismatchedTag]))
 
 instance SQ.ToRow FileEvent where
-  toRow (FileEvent time path (FileAdd cs)) = SQ.toRow (time, fptotext path, "Add" :: T.Text, Just cs)
-  toRow (FileEvent time path FileDelete)   = SQ.toRow (time, fptotext path, "Delete" :: T.Text, Nothing :: Maybe T.Text)
+  toRow (FileEvent time path (FileAdd cs)) =
+    SQ.toRow (time, fptotext path, "Add" :: T.Text, Just cs)
+  toRow (FileEvent time path FileDelete) =
+    SQ.toRow (time, fptotext path, "Delete" :: T.Text, Nothing :: Maybe T.Text)
 
 testdb = do
   conn <- SQ.open "/tmp/gpg-tests/thedb.db"
-  SQ.execute_ conn "CREATE TABLE IF NOT EXISTS main_file_events (id INTEGER PRIMARY KEY, time TEXT, path TEXT, type TEXT, checksum TEXT)"
+  SQ.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS main_file_events (id INTEGER PRIMARY KEY, time TEXT, path TEXT, type TEXT, checksum TEXT)"
   --  SQ.execute conn "INSERT INTO test (path, checksum) VALUES (?,?)" (SQ.Only ("test string 2" :: String))
   path <- pwd
   now <- DTC.getCurrentTime
-  SQ.execute conn "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)" (FileEvent now path (FileAdd "123"))
-  SQ.execute conn "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)" (FileEvent now path FileDelete)
-  r <- SQ.query_ conn "SELECT time, path, type, checksum from main_file_events" :: IO [FileEvent]
+  SQ.execute
+    conn
+    "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)"
+    (FileEvent now path (FileAdd "123"))
+  SQ.execute
+    conn
+    "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)"
+    (FileEvent now path FileDelete)
+  r <-
+    SQ.query_ conn "SELECT time, path, type, checksum from main_file_events" :: IO [FileEvent]
   SQ.close conn
   return (show r)
 
