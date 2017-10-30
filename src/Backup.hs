@@ -12,6 +12,8 @@ import qualified Control.Monad.Trans.Class as MT
 import qualified Crypto.Hash as CH
 import qualified Crypto.Hash.Algorithms as CHA
 import qualified Data.ByteString as BS
+import qualified Data.HashMap.Strict as HashMap
+import Data.HashMap.Strict (HashMap)
 import qualified Data.Text as T
 import qualified Data.Time as DT
 import qualified Data.Time.Clock as DTC
@@ -33,6 +35,7 @@ shasum =
      (CH.hashInit :: CH.Context CHA.SHA1)
      CH.hashFinalize)
 
+-- | CAUTION will throw exception "openFile: inappropriate type (is a directory)" on directories
 inshasum :: MonadIO io => FilePath -> io (CH.Digest CHA.SHA1)
 inshasum fp =
   fold
@@ -98,6 +101,7 @@ fptotext fp =
     Left s -> error ("Can't stringify path: " ++ (T.unpack s))
     Right s -> s
 
+---- Couldn't get this stuff to work.
 data FileEventParseError =
   MismatchedTag
   deriving (Eq, Show, Typeable)
@@ -124,6 +128,34 @@ instance SQ.ToRow FileEvent where
   toRow (FileEvent time path FileDelete) =
     SQ.toRow (time, fptotext path, "Delete" :: T.Text, Nothing :: Maybe T.Text)
 
+fileHashes :: MonadIO io => FoldM io  FilePath (HashMap String [FilePath])
+fileHashes = F.FoldM step (return HashMap.empty) return where
+  step hmap fp = do hash <- inshasum fp
+                    return (HashMap.insertWith (++) (show hash) [fp] hmap)
+
+-- | Just use filename for comparison, not checksums
+cheapHashes :: Fold FilePath (HashMap String [FilePath])
+cheapHashes = F.Fold step HashMap.empty id where
+  step hmap fp = (HashMap.insertWith (++) (show (filename fp)) [fp] hmap)
+
+-- | Returns (leftButNotRight, rightButNotLeft)
+deepDiff :: MonadIO io => FilePath -> FilePath -> io ([FilePath],[FilePath])
+deepDiff leftPath rightPath = do leftMap <- foldIO (filterRegularFiles (lstree leftPath)) fileHashes
+                                 rightMap <- foldIO (filterRegularFiles (lstree rightPath)) fileHashes
+                                 return (concat (HashMap.elems (HashMap.difference leftMap rightMap)),
+                                         concat (HashMap.elems (HashMap.difference rightMap leftMap)))
+
+-- | Returns (leftButNotRight, rightButNotLeft)
+cheapDiff :: MonadIO io => FilePath -> FilePath -> io ([FilePath],[FilePath])
+cheapDiff leftPath rightPath = do leftMap <- fold (filterRegularFiles (lstree leftPath)) cheapHashes
+                                  rightMap <- fold (filterRegularFiles (lstree rightPath)) cheapHashes
+                                  return (concat (HashMap.elems (HashMap.difference leftMap rightMap)),
+                                          concat (HashMap.elems (HashMap.difference rightMap leftMap)))
+
+-- | uses the first filename as the filename of the target.
+cpToDir :: MonadIO io => FilePath -> FilePath -> io ()
+cpToDir from toDir = cp from (toDir </> (filename from))
+
 testdb = do
   conn <- SQ.open "/tmp/gpg-tests/thedb.db"
   SQ.execute_
@@ -145,7 +177,4 @@ testdb = do
   SQ.close conn
   return (show r)
 
--- ascii armour'd:
--- stdout $ (inproc "gpg" ["-a", "-r", "Nathan Sorenson (SFU)", "--encrypt"] (select ["hello"]))
-someFunc :: IO ()
-someFunc = putStrLn "someFunc"
+-- um :: FileArchive -> FilePath -> (FileArchive, FileEvent)

@@ -3,4 +3,4 @@ module Main where
 import Backup
 
 main :: IO ()
-main = someFunc
+main = undefined
