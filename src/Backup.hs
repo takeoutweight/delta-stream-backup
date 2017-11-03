@@ -128,7 +128,8 @@ instance SQ.ToRow FileEvent where
   toRow (FileEvent time path FileDelete) =
     SQ.toRow (time, fptotext path, "Delete" :: T.Text, Nothing :: Maybe T.Text)
 
-fileHashes :: MonadIO io => FoldM io  FilePath (HashMap String [FilePath])
+-- | Fold that writes hashes into a HashMap
+fileHashes :: MonadIO io => FoldM io FilePath (HashMap String [FilePath])
 fileHashes = F.FoldM step (return HashMap.empty) return where
   step hmap fp = do hash <- inshasum fp
                     return (HashMap.insertWith (++) (show hash) [fp] hmap)
@@ -151,6 +152,23 @@ cheapDiff leftPath rightPath = do leftMap <- fold (filterRegularFiles (lstree le
                                   rightMap <- fold (filterRegularFiles (lstree rightPath)) cheapHashes
                                   return (concat (HashMap.elems (HashMap.difference leftMap rightMap)),
                                           concat (HashMap.elems (HashMap.difference rightMap leftMap)))
+
+-- | returns a FoldM that writes a list of FileEvents to SQLite, opens and closes connection for us.
+writeDB :: MonadIO io => SQ.Connection -> FoldM io FileEvent ()
+writeDB conn = F.FoldM step (return ()) (\_ -> return ()) where
+  step _ fe = do liftIO (SQ.execute conn "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)" fe)
+
+-- | Converts a filepath to a FileAdd
+pathToFileEvent :: MonadIO io => FilePath -> io FileEvent
+pathToFileEvent fp = do hash <- inshasum fp
+                        now <- date
+                        return (FileEvent now fp (FileAdd (T.pack (show hash))))
+
+-- | writes a tree of checksums to a sqlite db
+addTreeToDb :: String -> FilePath -> IO ()
+addTreeToDb dbpath treepath = let evts = do path <- filterRegularFiles (lstree treepath)
+                                            pathToFileEvent path in
+                                SQ.withConnection dbpath (\conn -> foldIO evts (writeDB conn))
 
 -- | uses the first filename as the filename of the target.
 cpToDir :: MonadIO io => FilePath -> FilePath -> io ()
@@ -178,3 +196,4 @@ testdb = do
   return (show r)
 
 -- um :: FileArchive -> FilePath -> (FileArchive, FileEvent)
+-- :set -XOverloadedStrings
