@@ -19,6 +19,7 @@ import qualified Data.List as List
 import qualified Data.Text as T
 import qualified Data.Time as DT
 import qualified Data.Time.Clock as DTC
+import qualified Data.Time.Clock.POSIX as POSIX
 import Data.Typeable (Typeable, typeOf)
 import qualified Database.SQLite.Simple as SQ
 import qualified Database.SQLite.Simple.FromField as SQF
@@ -48,7 +49,7 @@ inSizeAndSha :: MonadIO io => FilePath -> io (Int, (CH.Digest CHA.SHA1))
 inSizeAndSha fp =
   fold
     (TB.input fp)
-    ((,) <$> F.length
+    ((,) <$> F.premap BS.length F.sum
          <*> (F.Fold CH.hashUpdate (CH.hashInit :: CH.Context CHA.SHA1) CH.hashFinalize))
 -- eg
 -- view $ (filterRegularFiles (lstree "src")) >>= shasum
@@ -58,6 +59,16 @@ filterRegularFiles fns = do
   s <- lstat fn
   if (isRegularFile s)
     then (return fn)
+    else empty
+
+-- | returns the time of check as well.
+regularStats :: Shell FilePath -> Shell (DTC.UTCTime, FilePath, FileStatus)
+regularStats fns = do
+  fn <- fns
+  now <- date
+  s <- lstat fn
+  if (isRegularFile s)
+    then (return (now, fn, s))
     else empty
 
 -- TODO build recursive tree Shell (FilePath, shasum pairs)
@@ -226,17 +237,20 @@ writeDB conn = F.FoldM step (return ()) (\_ -> return ()) where
   step _ fe = do liftIO (SQ.execute conn "INSERT INTO main_file_checks (time, path, tag, modtime, filesize, checksum, errmsg) VALUES (?,?,?,?,?,?,?)" fe)
 
 -- | Converts a filepath to a FileAdd
-checkFile :: MonadIO io => FilePath -> io FileCheck
-checkFile fp = do hash <- inshasum fp
-                  now <- date
-                  return (FileCheck now fp (FileStats (FileStatsR {_modtime = now -- TODO
-                                                                  ,_filesize = 0 -- TODO
-                                                                  ,_checksum = (T.pack (show hash))})))
+checkFile :: MonadIO io => DTC.UTCTime -> FilePath -> FileStatus -> io FileCheck
+checkFile now fp stat = do
+  (size, hash) <- inSizeAndSha fp
+  return (FileCheck now fp (FileStats (FileStatsR {_modtime = POSIX.posixSecondsToUTCTime (modificationTime stat)
+                                                  ,_filesize = size
+                                                  ,_checksum = (T.pack (show hash))})))
 
--- | writes a tree of checksums to a sqlite db
+-- | writes a ls tree of checksums to a sqlite db, storing check time, modtime,
+-- filesize and sha.  TODO: We could add an optimization so we only do the
+-- checkFile and write if the file is new or modtime/filesize changed (or
+-- checktime is too long ago to trust etc)
 addTreeToDb :: String -> FilePath -> IO ()
-addTreeToDb dbpath treepath = let checks = do path <- filterRegularFiles (lstree treepath)
-                                              checkFile path in
+addTreeToDb dbpath treepath = let checks = do (now, path, stats) <- regularStats (lstree treepath)
+                                              checkFile now path stats in
                                 SQ.withConnection dbpath (\conn -> foldIO checks (writeDB conn))
 
 -- | uses the first filename as the filename of the target.
