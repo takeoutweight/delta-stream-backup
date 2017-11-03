@@ -1,3 +1,4 @@
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE DeriveDataTypeable #-}
@@ -14,6 +15,7 @@ import qualified Crypto.Hash.Algorithms as CHA
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HashMap
 import Data.HashMap.Strict (HashMap)
+import qualified Data.List as List
 import qualified Data.Text as T
 import qualified Data.Time as DT
 import qualified Data.Time.Clock as DTC
@@ -42,6 +44,12 @@ inshasum fp =
     (TB.input fp)
     (F.Fold CH.hashUpdate (CH.hashInit :: CH.Context CHA.SHA1) CH.hashFinalize)
 
+inSizeAndSha :: MonadIO io => FilePath -> io (Int, (CH.Digest CHA.SHA1))
+inSizeAndSha fp =
+  fold
+    (TB.input fp)
+    ((,) <$> F.length
+         <*> (F.Fold CH.hashUpdate (CH.hashInit :: CH.Context CHA.SHA1) CH.hashFinalize))
 -- eg
 -- view $ (filterRegularFiles (lstree "src")) >>= shasum
 filterRegularFiles :: Shell FilePath -> Shell FilePath
@@ -84,22 +92,29 @@ outputWithChecksum fp bs =
        (\h -> foldIO bs ((appendFold h) *> F.generalize shasum)))
 
 type Checksum = T.Text
+type FileSizeBytes = Int
+type ModTime = DTC.UTCTime
 
-data FileEventType
-  = FileAdd Checksum
-  | FileDelete
+data FileStatsR = FileStatsR
+  { _modtime :: !DTC.UTCTime
+  , _filesize :: !Int
+  , _checksum :: !T.Text
+  } deriving (Show)
+
+-- | Not sure baking errors into the data form is the right way to do it but
+-- works for at least having a way of figuring out something went wrong and
+-- proceeding w/o log messages etc.
+data FileInfo
+  = FileStats !FileStatsR
+  | FileProblem !T.Text
+  | FileGone
   deriving (Show)
 
-data FileEvent =
-  FileEvent DTC.UTCTime
-            FilePath
-            FileEventType
-  deriving (Show)
-
-fptotext fp =
-  case (toText fp) of
-    Left s -> error ("Can't stringify path: " ++ (T.unpack s))
-    Right s -> s
+data FileCheck = FileCheck
+  { _checktime :: !DTC.UTCTime
+  , _filepath :: !FilePath
+  , _fileinfo :: !FileInfo
+  } deriving (Show)
 
 ---- Couldn't get this stuff to work.
 data FileEventParseError =
@@ -108,25 +123,77 @@ data FileEventParseError =
 
 instance CE.Exception FileEventParseError
 
-instance SQS.FromRow FileEvent where
+instance SQS.FromRow FileCheck where
   fromRow = do
-    (time, path, tag, mcs) <-
-      ((,,,) <$> SQS.field <*> SQS.field <*> SQS.field <*> SQS.field) :: SQS.RowParser ( DTC.UTCTime
-                                                                                       , T.Text
-                                                                                       , T.Text
-                                                                                       , Maybe T.Text)
-    case (tag, mcs) of
-      ("Add", Just cs) -> return (FileEvent time (fromText path) (FileAdd cs))
-      ("Delete", Nothing) -> return (FileEvent time (fromText path) FileDelete)
+    (time, path, tag, modtime, filesize, checksum, errmsg) <-
+      ((,,,,,,) <$> SQS.field <*> SQS.field <*> SQS.field <*> SQS.field <*>
+       SQS.field <*>
+       SQS.field <*>
+       SQS.field) :: SQS.RowParser ( DTC.UTCTime
+                                   , T.Text
+                                   , T.Text
+                                   , Maybe DTC.UTCTime
+                                   , Maybe Int
+                                   , Maybe T.Text
+                                   , Maybe T.Text)
+    case (tag, modtime, filesize, checksum, errmsg) of
+      ("Stats", Just modtime, Just filesize, Just checksum, Nothing) ->
+        return
+          (FileCheck
+             time
+             (fromText path)
+             (FileStats
+                (FileStatsR
+                 { _modtime = modtime
+                 , _filesize = filesize
+                 , _checksum = checksum
+                 })))
+      ("Problem", Nothing, Nothing, Nothing, Just msg) ->
+        return (FileCheck time (fromText path) (FileProblem msg))
+      ("Gone", Nothing, Nothing, Nothing, Nothing) ->
+        return (FileCheck time (fromText path) FileGone)
       _ ->
-        error
-          ("FileEvent row not correcntly stored: " ++ (show tag) ++ (show mcs)) -- (maybe we can't hook into the sql parser errors and have to do that elsewhere?) MT.lift (MT.lift (SQOK.Errors [CE.toException MismatchedTag]))
+        return
+          (FileCheck
+             time
+             (fromText path)
+             (FileProblem
+                ("FileEvent row not correctly stored: " <>
+                 (T.pack (show (modtime, filesize, checksum, errmsg))) -- could we hook into builtin parsing error stuff? MT.lift (MT.lift (SQOK.Errors [CE.toException MismatchedTag]))
+                 )))
 
-instance SQ.ToRow FileEvent where
-  toRow (FileEvent time path (FileAdd cs)) =
-    SQ.toRow (time, fptotext path, "Add" :: T.Text, Just cs)
-  toRow (FileEvent time path FileDelete) =
-    SQ.toRow (time, fptotext path, "Delete" :: T.Text, Nothing :: Maybe T.Text)
+instance SQ.ToRow FileCheck where
+  toRow (FileCheck {_checktime, _filepath, _fileinfo}) =
+    SQ.toRow
+      (case (toText _filepath) of
+         Left msg ->
+           ( _checktime
+           , "???"
+           , "Problem" :: T.Text
+           , Nothing
+           , Nothing
+           , Nothing
+           , Just msg)
+         Right path ->
+           case _fileinfo of
+             FileStats (FileStatsR {_modtime, _filesize, _checksum}) ->
+               ( _checktime
+               , path
+               , "Stats"
+               , Just _modtime
+               , Just _filesize
+               , Just _checksum
+               , Nothing)
+             FileProblem msg ->
+               ( _checktime
+               , path
+               , "Problem"
+               , Nothing
+               , Nothing
+               , Nothing
+               , Just msg)
+             FileGone ->
+               (_checktime, path, "Gone", Nothing, Nothing, Nothing, Nothing))
 
 -- | Fold that writes hashes into a HashMap
 fileHashes :: MonadIO io => FoldM io FilePath (HashMap String [FilePath])
@@ -154,46 +221,37 @@ cheapDiff leftPath rightPath = do leftMap <- fold (filterRegularFiles (lstree le
                                           concat (HashMap.elems (HashMap.difference rightMap leftMap)))
 
 -- | returns a FoldM that writes a list of FileEvents to SQLite, opens and closes connection for us.
-writeDB :: MonadIO io => SQ.Connection -> FoldM io FileEvent ()
+writeDB :: MonadIO io => SQ.Connection -> FoldM io FileCheck ()
 writeDB conn = F.FoldM step (return ()) (\_ -> return ()) where
-  step _ fe = do liftIO (SQ.execute conn "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)" fe)
+  step _ fe = do liftIO (SQ.execute conn "INSERT INTO main_file_checks (time, path, tag, modtime, filesize, checksum, errmsg) VALUES (?,?,?,?,?,?,?)" fe)
 
 -- | Converts a filepath to a FileAdd
-pathToFileEvent :: MonadIO io => FilePath -> io FileEvent
-pathToFileEvent fp = do hash <- inshasum fp
-                        now <- date
-                        return (FileEvent now fp (FileAdd (T.pack (show hash))))
+checkFile :: MonadIO io => FilePath -> io FileCheck
+checkFile fp = do hash <- inshasum fp
+                  now <- date
+                  return (FileCheck now fp (FileStats (FileStatsR {_modtime = now -- TODO
+                                                                  ,_filesize = 0 -- TODO
+                                                                  ,_checksum = (T.pack (show hash))})))
 
 -- | writes a tree of checksums to a sqlite db
 addTreeToDb :: String -> FilePath -> IO ()
-addTreeToDb dbpath treepath = let evts = do path <- filterRegularFiles (lstree treepath)
-                                            pathToFileEvent path in
-                                SQ.withConnection dbpath (\conn -> foldIO evts (writeDB conn))
+addTreeToDb dbpath treepath = let checks = do path <- filterRegularFiles (lstree treepath)
+                                              checkFile path in
+                                SQ.withConnection dbpath (\conn -> foldIO checks (writeDB conn))
 
 -- | uses the first filename as the filename of the target.
 cpToDir :: MonadIO io => FilePath -> FilePath -> io ()
 cpToDir from toDir = cp from (toDir </> (filename from))
 
-testdb = do
-  conn <- SQ.open "/tmp/gpg-tests/thedb.db"
-  SQ.execute_
-    conn
-    "CREATE TABLE IF NOT EXISTS main_file_events (id INTEGER PRIMARY KEY, time TEXT, path TEXT, type TEXT, checksum TEXT)"
-  --  SQ.execute conn "INSERT INTO test (path, checksum) VALUES (?,?)" (SQ.Only ("test string 2" :: String))
-  path <- pwd
-  now <- DTC.getCurrentTime
-  SQ.execute
-    conn
-    "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)"
-    (FileEvent now path (FileAdd "123"))
-  SQ.execute
-    conn
-    "INSERT INTO main_file_events (time, path, type, checksum) VALUES (?,?,?,?)"
-    (FileEvent now path FileDelete)
-  r <-
-    SQ.query_ conn "SELECT time, path, type, checksum from main_file_events" :: IO [FileEvent]
-  SQ.close conn
-  return (show r)
+createDB filename =
+  SQ.withConnection
+    filename
+    (\conn ->
+       SQ.execute_
+         conn
+         "CREATE TABLE IF NOT EXISTS main_file_checks (id INTEGER PRIMARY KEY, time TEXT, path TEXT, tag TEXT, modtime TEXT, filesize INTEGER, checksum TEXT, errmsg TEXT)"
+    )
 
+-- SQ.query_ conn "SELECT time, path, type, checksum from main_file_events" :: IO [FileEvent]
 -- um :: FileArchive -> FilePath -> (FileArchive, FileEvent)
 -- :set -XOverloadedStrings
