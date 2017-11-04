@@ -263,8 +263,7 @@ createDB filename =
     (\conn ->
        SQ.execute_
          conn
-         "CREATE TABLE IF NOT EXISTS main_file_checks (id INTEGER PRIMARY KEY, time TEXT, path TEXT, tag TEXT, modtime TEXT, filesize INTEGER, checksum TEXT, errmsg TEXT)"
-    )
+         "CREATE TABLE IF NOT EXISTS main_file_checks (id INTEGER PRIMARY KEY, time TEXT, path TEXT, tag TEXT, modtime TEXT, filesize INTEGER, checksum TEXT, errmsg TEXT)")
 
 -- SQ.query_ conn "SELECT time, path, type, checksum from main_file_events" :: IO [FileEvent]
 -- um :: FileArchive -> FilePath -> (FileArchive, FileEvent)
