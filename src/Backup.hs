@@ -191,12 +191,57 @@ instance SQ.ToRow FileCheck where
   toRow (FileCheck { _checktime
                    , _filepath
                    , _fileroot
+                   , _fileoffset
                    , _filename
                    , _filemachine
                    , _fileinfo
                    }) =
-    (case (toText _filepath) of
-       Left msg ->
+    (case ( (toText _filepath)
+          , (toText _fileroot)
+          , (toText _fileoffset)
+          , (toText _filename)) of
+       (Right path, Right root, Right offset, Right name) ->
+         (case _fileinfo of
+            FileStats (FileStatsR {_modtime, _filesize, _checksum}) ->
+              [ SQTF.toField _checktime
+              , SQTF.toField path
+              , SQTF.toField root
+              , SQTF.toField offset
+              , SQTF.toField name
+              , SQTF.toField thisMachine
+              , SQTF.toField ("Stats" :: T.Text)
+              , SQTF.toField (Just _modtime)
+              , SQTF.toField (Just _filesize)
+              , SQTF.toField (Just _checksum)
+              , SQTF.toField (Nothing :: Maybe T.Text)
+              ]
+            FileProblem msg ->
+              [ SQTF.toField _checktime
+              , SQTF.toField path
+              , SQTF.toField root
+              , SQTF.toField offset
+              , SQTF.toField name
+              , SQTF.toField thisMachine
+              , SQTF.toField ("Problem" :: T.Text)
+              , SQTF.toField (Nothing :: Maybe DTC.UTCTime)
+              , SQTF.toField (Nothing :: Maybe Int)
+              , SQTF.toField (Nothing :: Maybe T.Text)
+              , SQTF.toField (Just msg)
+              ]
+            FileGone ->
+              [ SQTF.toField _checktime
+              , SQTF.toField path
+              , SQTF.toField root
+              , SQTF.toField offset
+              , SQTF.toField name
+              , SQTF.toField thisMachine
+              , SQTF.toField ("Gone" :: T.Text)
+              , SQTF.toField (Nothing :: Maybe DTC.UTCTime)
+              , SQTF.toField (Nothing :: Maybe Int)
+              , SQTF.toField (Nothing :: Maybe T.Text)
+              , SQTF.toField (Nothing :: Maybe T.Text)
+              ])
+       (path, root, offset, name) ->
          [ SQTF.toField _checktime
          , SQTF.toField ("???" :: T.Text)
          , SQTF.toField ("???" :: T.Text)
@@ -207,48 +252,9 @@ instance SQ.ToRow FileCheck where
          , SQTF.toField (Nothing :: Maybe DTC.UTCTime)
          , SQTF.toField (Nothing :: Maybe Int)
          , SQTF.toField (Nothing :: Maybe T.Text)
-         , SQTF.toField (Just msg)
-         ]
-       Right path ->
-         case _fileinfo of
-           FileStats (FileStatsR {_modtime, _filesize, _checksum}) ->
-             [ SQTF.toField _checktime
-             , SQTF.toField path
-             , SQTF.toField path
-             , SQTF.toField path
-             , SQTF.toField path
-             , SQTF.toField thisMachine
-             , SQTF.toField ("Stats" :: T.Text)
-             , SQTF.toField (Just _modtime)
-             , SQTF.toField (Just _filesize)
-             , SQTF.toField (Just _checksum)
-             , SQTF.toField (Nothing :: Maybe T.Text)
-             ]
-           FileProblem msg ->
-             [ SQTF.toField _checktime
-             , SQTF.toField path
-             , SQTF.toField path
-             , SQTF.toField path
-             , SQTF.toField path
-             , SQTF.toField thisMachine
-             , SQTF.toField ("Problem" :: T.Text)
-             , SQTF.toField (Nothing :: Maybe DTC.UTCTime)
-             , SQTF.toField (Nothing :: Maybe Int)
-             , SQTF.toField (Nothing :: Maybe T.Text)
-             , SQTF.toField (Just msg)
-             ]
-           FileGone ->
-             [ SQTF.toField _checktime
-             , SQTF.toField path
-             , SQTF.toField path
-             , SQTF.toField path
-             , SQTF.toField path
-             , SQTF.toField thisMachine
-             , SQTF.toField ("Gone" :: T.Text)
-             , SQTF.toField (Nothing :: Maybe DTC.UTCTime)
-             , SQTF.toField (Nothing :: Maybe Int)
-             , SQTF.toField (Nothing :: Maybe T.Text)
-             , SQTF.toField (Nothing :: Maybe T.Text)])
+         , SQTF.toField
+             (Just ((show path) ++ (show root) ++ (show offset) ++ (show name)))
+         ])
 
 -- | Fold that writes hashes into a HashMap
 fileHashes :: MonadIO io => FoldM io FilePath (HashMap String [FilePath])
