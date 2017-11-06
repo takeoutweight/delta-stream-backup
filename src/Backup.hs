@@ -23,6 +23,7 @@ import qualified Data.Time.Clock.POSIX as POSIX
 import Data.Typeable (Typeable, typeOf)
 import qualified Database.SQLite.Simple as SQ
 import qualified Database.SQLite.Simple.FromField as SQF
+import qualified Database.SQLite.Simple.ToField as SQTF
 import qualified Database.SQLite.Simple.FromRow as SQS
 import qualified Database.SQLite.Simple.Ok as SQOK
 import qualified Filesystem.Path.CurrentOS as FP
@@ -121,9 +122,15 @@ data FileInfo
   | FileGone
   deriving (Show)
 
+thisMachine = "Nathans-MacBook-Pro-2" :: T.Text
+
 data FileCheck = FileCheck
   { _checktime :: !DTC.UTCTime
   , _filepath :: !FilePath
+  , _fileroot :: !FilePath
+  , _fileoffset :: !FilePath
+  , _filename :: !FilePath
+  , _filemachine :: !T.Text
   , _fileinfo :: !FileInfo
   } deriving (Show)
 
@@ -136,75 +143,112 @@ instance CE.Exception FileEventParseError
 
 instance SQS.FromRow FileCheck where
   fromRow = do
-    (time, path, tag, modtime, filesize, checksum, errmsg) <-
-      ((,,,,,,) <$> SQS.field <*> SQS.field <*> SQS.field <*> SQS.field <*>
+    (time, path, root, offset, name, machine, tag, modtime, filesize, checksum, errmsg) <-
+      ((,,,,,,,,,,) <$> SQS.field <*> SQS.field <*> SQS.field <*> SQS.field <*>
+       SQS.field <*>
+       SQS.field <*>
+       SQS.field <*>
+       SQS.field <*>
        SQS.field <*>
        SQS.field <*>
        SQS.field) :: SQS.RowParser ( DTC.UTCTime
+                                   , T.Text
+                                   , T.Text
+                                   , T.Text
+                                   , T.Text
                                    , T.Text
                                    , T.Text
                                    , Maybe DTC.UTCTime
                                    , Maybe Int
                                    , Maybe T.Text
                                    , Maybe T.Text)
-    case (tag, modtime, filesize, checksum, errmsg) of
-      ("Stats", Just modtime, Just filesize, Just checksum, Nothing) ->
-        return
-          (FileCheck
-             time
-             (fromText path)
-             (FileStats
-                (FileStatsR
-                 { _modtime = modtime
-                 , _filesize = filesize
-                 , _checksum = checksum
-                 })))
-      ("Problem", Nothing, Nothing, Nothing, Just msg) ->
-        return (FileCheck time (fromText path) (FileProblem msg))
-      ("Gone", Nothing, Nothing, Nothing, Nothing) ->
-        return (FileCheck time (fromText path) FileGone)
-      _ ->
-        return
-          (FileCheck
-             time
-             (fromText path)
-             (FileProblem
-                ("FileEvent row not correctly stored: " <>
-                 (T.pack (show (modtime, filesize, checksum, errmsg))) -- could we hook into builtin parsing error stuff? MT.lift (MT.lift (SQOK.Errors [CE.toException MismatchedTag]))
-                 )))
+    return
+      (FileCheck
+         time
+         (fromText path)
+         (fromText root)
+         (fromText offset)
+         (fromText name)
+         machine
+         (case (tag, modtime, filesize, checksum, errmsg) of
+            ("Stats", Just modtime, Just filesize, Just checksum, Nothing) ->
+              (FileStats
+                 (FileStatsR
+                  { _modtime = modtime
+                  , _filesize = filesize
+                  , _checksum = checksum
+                  }))
+            ("Problem", Nothing, Nothing, Nothing, Just msg) ->
+              (FileProblem msg)
+            ("Gone", Nothing, Nothing, Nothing, Nothing) -> FileGone
+            _ ->
+              (FileProblem
+                 ("FileEvent row not correctly stored: " <>
+                  (T.pack (show (modtime, filesize, checksum, errmsg))) -- could we hook into builtin parsing error stuff? MT.lift (MT.lift (SQOK.Errors [CE.toException MismatchedTag]))
+                  ))))
 
 instance SQ.ToRow FileCheck where
-  toRow (FileCheck {_checktime, _filepath, _fileinfo}) =
-    SQ.toRow
-      (case (toText _filepath) of
-         Left msg ->
-           ( _checktime
-           , "???"
-           , "Problem" :: T.Text
-           , Nothing
-           , Nothing
-           , Nothing
-           , Just msg)
-         Right path ->
-           case _fileinfo of
-             FileStats (FileStatsR {_modtime, _filesize, _checksum}) ->
-               ( _checktime
-               , path
-               , "Stats"
-               , Just _modtime
-               , Just _filesize
-               , Just _checksum
-               , Nothing)
-             FileProblem msg ->
-               ( _checktime
-               , path
-               , "Problem"
-               , Nothing
-               , Nothing
-               , Nothing
-               , Just msg)
-             FileGone ->
-               (_checktime, path, "Gone", Nothing, Nothing, Nothing, Nothing))
+  toRow (FileCheck { _checktime
+                   , _filepath
+                   , _fileroot
+                   , _filename
+                   , _filemachine
+                   , _fileinfo
+                   }) =
+    (case (toText _filepath) of
+       Left msg ->
+         [ SQTF.toField _checktime
+         , SQTF.toField ("???" :: T.Text)
+         , SQTF.toField ("???" :: T.Text)
+         , SQTF.toField ("???" :: T.Text)
+         , SQTF.toField ("???" :: T.Text)
+         , SQTF.toField thisMachine
+         , SQTF.toField ("Problem" :: T.Text)
+         , SQTF.toField (Nothing :: Maybe DTC.UTCTime)
+         , SQTF.toField (Nothing :: Maybe Int)
+         , SQTF.toField (Nothing :: Maybe T.Text)
+         , SQTF.toField (Just msg)
+         ]
+       Right path ->
+         case _fileinfo of
+           FileStats (FileStatsR {_modtime, _filesize, _checksum}) ->
+             [ SQTF.toField _checktime
+             , SQTF.toField path
+             , SQTF.toField path
+             , SQTF.toField path
+             , SQTF.toField path
+             , SQTF.toField thisMachine
+             , SQTF.toField ("Stats" :: T.Text)
+             , SQTF.toField (Just _modtime)
+             , SQTF.toField (Just _filesize)
+             , SQTF.toField (Just _checksum)
+             , SQTF.toField (Nothing :: Maybe T.Text)
+             ]
+           FileProblem msg ->
+             [ SQTF.toField _checktime
+             , SQTF.toField path
+             , SQTF.toField path
+             , SQTF.toField path
+             , SQTF.toField path
+             , SQTF.toField thisMachine
+             , SQTF.toField ("Problem" :: T.Text)
+             , SQTF.toField (Nothing :: Maybe DTC.UTCTime)
+             , SQTF.toField (Nothing :: Maybe Int)
+             , SQTF.toField (Nothing :: Maybe T.Text)
+             , SQTF.toField (Just msg)
+             ]
+           FileGone ->
+             [ SQTF.toField _checktime
+             , SQTF.toField path
+             , SQTF.toField path
+             , SQTF.toField path
+             , SQTF.toField path
+             , SQTF.toField thisMachine
+             , SQTF.toField ("Gone" :: T.Text)
+             , SQTF.toField (Nothing :: Maybe DTC.UTCTime)
+             , SQTF.toField (Nothing :: Maybe Int)
+             , SQTF.toField (Nothing :: Maybe T.Text)
+             , SQTF.toField (Nothing :: Maybe T.Text)])
 
 -- | Fold that writes hashes into a HashMap
 fileHashes :: MonadIO io => FoldM io FilePath (HashMap String [FilePath])
@@ -240,9 +284,20 @@ writeDB conn = F.FoldM step (return ()) (\_ -> return ()) where
 checkFile :: MonadIO io => DTC.UTCTime -> FilePath -> FileStatus -> io FileCheck
 checkFile now fp stat = do
   (size, hash) <- inSizeAndSha fp
-  return (FileCheck now fp (FileStats (FileStatsR {_modtime = POSIX.posixSecondsToUTCTime (modificationTime stat)
-                                                  ,_filesize = size
-                                                  ,_checksum = (T.pack (show hash))})))
+  return
+    (FileCheck
+       now
+       fp
+       fp
+       fp
+       fp
+       thisMachine
+       (FileStats
+          (FileStatsR
+           { _modtime = POSIX.posixSecondsToUTCTime (modificationTime stat)
+           , _filesize = size
+           , _checksum = (T.pack (show hash))
+           })))
 
 -- | writes a ls tree of checksums to a sqlite db, storing check time, modtime,
 -- filesize and sha.  TODO: We could add an optimization so we only do the
