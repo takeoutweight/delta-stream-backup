@@ -2,6 +2,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 module Backup where
 
@@ -13,14 +19,24 @@ import qualified Control.Monad.Trans.Class as MT
 import qualified Crypto.Hash as CH
 import qualified Crypto.Hash.Algorithms as CHA
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as BSB
+import qualified Data.DList as DL
 import qualified Data.HashMap.Strict as HashMap
 import Data.HashMap.Strict (HashMap)
 import qualified Data.List as List
+import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Time as DT
+import Data.Time.Clock (UTCTime)
 import qualified Data.Time.Clock as DTC
 import qualified Data.Time.Clock.POSIX as POSIX
+import qualified Data.Time.LocalTime as DTL
 import Data.Typeable (Typeable, typeOf)
+import Database.Beam
+import qualified Database.Beam as Beam
+import Database.Beam.Sqlite
+import Database.Beam.Backend.SQL.SQL92
+import qualified Database.Beam.Sqlite.Syntax as BSS
 import qualified Database.SQLite.Simple as SQ
 import qualified Database.SQLite.Simple.FromField as SQF
 import qualified Database.SQLite.Simple.ToField as SQTF
@@ -29,7 +45,8 @@ import qualified Database.SQLite.Simple.Ok as SQOK
 import qualified Filesystem.Path.CurrentOS as FP
 import Prelude hiding (FilePath, head)
 import qualified System.IO.Error as IOE
-import Turtle
+import Turtle hiding (select)
+import qualified Turtle as Turtle
 import qualified Turtle.Bytes as TB
 
 shasum :: Fold BS.ByteString (CH.Digest CHA.SHA1)
@@ -133,6 +150,53 @@ data FileCheck = FileCheck
   , _filemachine :: !T.Text
   , _fileinfo :: !FileInfo
   } deriving (Show)
+
+-- copied from Database.Beam.Sqlite.Syntax to allow UTCTime. Not sure this is
+-- right, but seems like the LocalTime that we can write out of the box doesn't
+-- serialize the timezone. You can specify timezone in the column, but what
+-- enforces you writing the same time-zone back into the DB if you change that
+-- later? Besides - Turtle uses UTCTime so this is easier.
+emitValue :: SQ.SQLData -> BSS.SqliteSyntax
+emitValue v = SqliteSyntax (BSB.byteString "?") (DL.singleton v)
+
+instance HasSqlValueSyntax SqliteValueSyntax UTCTime where
+  sqlValueSyntax tm = SqliteValueSyntax (emitValue (SQ.SQLText (fromString tmStr)))
+    where tmStr = DT.formatTime DT.defaultTimeLocale (DT.iso8601DateFormat (Just "%H:%M:%S%Q")) tm
+
+-- | The Beam version
+data BFileCheckT f
+    = BFileCheck
+    { _bcheckid :: Columnar f (Auto Int)
+    , _bchecktime    :: Columnar f UTCTime
+    , _bfilemachine  :: Columnar f Text
+    }
+    {- _bchecktime     :: Columnar f DTC.UTCTime
+    , _bfilepath :: Columnar f FilePath
+    , _bfileroot  :: Columnar f FilePath
+    , _bfileoffset  :: Columnar f FilePath
+    , _bfilename  :: Columnar f FilePath
+    , _bfilemachine  :: Columnar f Text
+    -}
+    deriving (Generic)
+
+type BFileCheck = BFileCheckT Identity
+type BFileCheckId = PrimaryKey BFileCheckT Identity
+
+deriving instance Show BFileCheck
+deriving instance Eq BFileCheck
+instance Beamable BFileCheckT
+instance Table BFileCheckT where
+  data PrimaryKey BFileCheckT f = BFileCheckId (Columnar f (Auto Int)) deriving Generic
+  primaryKey = BFileCheckId . _bcheckid
+instance Beamable (PrimaryKey BFileCheckT)
+
+data BFileDB f = BFileDB
+  { _bFileChecks :: f (TableEntity BFileCheckT)
+  } deriving (Generic)
+instance Database BFileDB
+
+bFileDB :: DatabaseSettings be BFileDB
+bFileDB = defaultDbSettings
 
 ---- Couldn't get this stuff to work.
 data FileEventParseError =
@@ -313,6 +377,8 @@ createDB filename =
          conn
          "CREATE TABLE IF NOT EXISTS main_file_checks (id INTEGER PRIMARY KEY, time TEXT, path TEXT, tag TEXT, modtime TEXT, filesize INTEGER, checksum TEXT, errmsg TEXT)")
 
+-- CREATE TABLE IF NOT EXISTS file_checks (bcheckid INTEGER PRIMARY KEY, bchecktime TEXT, bfilemachine TEXT)
+-- DROP TABLE file_checks
 -- SQ.query_ conn "SELECT time, path, type, checksum from main_file_events" :: IO [FileEvent]
 -- um :: FileArchive -> FilePath -> (FileArchive, FileEvent)
 -- :set -XOverloadedStrings

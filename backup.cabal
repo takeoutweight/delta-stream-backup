@@ -17,8 +17,12 @@ library
   hs-source-dirs:      src
   exposed-modules:     Backup
   build-depends:       base >= 4.7 && < 5
+                     , beam-core
+                     , beam-sqlite
+                     , beam-migrate
                      , bytestring
                      , cryptonite
+                     , dlist
                      , text
                      , foldl
                      , managed
