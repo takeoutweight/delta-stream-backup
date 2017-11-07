@@ -163,20 +163,29 @@ instance HasSqlValueSyntax SqliteValueSyntax UTCTime where
   sqlValueSyntax tm = SqliteValueSyntax (emitValue (SQ.SQLText (fromString tmStr)))
     where tmStr = DT.formatTime DT.defaultTimeLocale (DT.iso8601DateFormat (Just "%H:%M:%S%Q")) tm
 
-data ShaCheckMixinT f
+data ShaCheckT f
   = ShaCheck
-  { _sha_check_time :: Columnar f UTCTime
+  { _sha_check_id :: Columnar f (Auto Int)
+  , _sha_check_time :: Columnar f UTCTime
   , _mod_time  :: Columnar f UTCTime
   , _file_size :: Columnar f Int
   , _actual_checksum  :: Columnar f Text -- i.e. on-disk checksum, not necessarily the plaintext checksum.
   } deriving (Generic)
 
-type ShaCheck = ShaCheckMixinT Identity
+type ShaCheck = ShaCheckT Identity
+type ShaCheckId = PrimaryKey ShaCheckT Identity
+
 deriving instance Show ShaCheck
 deriving instance Eq ShaCheck
-deriving instance Show (ShaCheckMixinT (Nullable Identity)) -- This alwasy required?
-deriving instance Eq (ShaCheckMixinT (Nullable Identity))
-instance Beamable ShaCheckMixinT
+deriving instance Show (ShaCheckT (Nullable Identity)) -- This always required for a nullable mixin?
+deriving instance Eq (ShaCheckT (Nullable Identity))
+deriving instance Show (PrimaryKey ShaCheckT (Nullable Identity))
+deriving instance Eq (PrimaryKey ShaCheckT (Nullable Identity))
+instance Beamable ShaCheckT
+instance Table ShaCheckT where
+  data PrimaryKey ShaCheckT f = ShaCheckId (Columnar f (Auto Int)) deriving Generic
+  primaryKey = ShaCheckId . _sha_check_id
+instance Beamable (PrimaryKey ShaCheckT)
 
 -- | The Beam version
 data FileInfoT f
@@ -189,7 +198,7 @@ data FileInfoT f
     , _file_root      :: Columnar f Text -- absolute path
     , _file_offset    :: Columnar f Text -- relative to root
     , _file_name      :: Columnar f Text
-    , _sha_check :: ShaCheckMixinT (Nullable f)
+    , _sha_check :: PrimaryKey ShaCheckT (Nullable f)
     }
     deriving (Generic)
 
