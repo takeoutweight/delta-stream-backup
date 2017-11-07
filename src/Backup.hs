@@ -133,7 +133,7 @@ data FileStatsR = FileStatsR
 -- | Not sure baking errors into the data form is the right way to do it but
 -- works for at least having a way of figuring out something went wrong and
 -- proceeding w/o log messages etc.
-data FileInfo
+data FileInfoOld
   = FileStats !FileStatsR
   | FileProblem !T.Text
   | FileGone
@@ -141,14 +141,14 @@ data FileInfo
 
 thisMachine = "Nathans-MacBook-Pro-2" :: T.Text
 
-data FileCheck = FileCheck
+data FileCheckOld = FileCheckOld
   { _checktime :: !DTC.UTCTime
   , _filepath :: !FilePath
   , _fileroot :: !FilePath
   , _fileoffset :: !FilePath
   , _filename :: !FilePath
   , _filemachine :: !T.Text
-  , _fileinfo :: !FileInfo
+  , _fileinfo :: !FileInfoOld
   } deriving (Show)
 
 -- copied from Database.Beam.Sqlite.Syntax to allow UTCTime. Not sure this is
@@ -163,40 +163,58 @@ instance HasSqlValueSyntax SqliteValueSyntax UTCTime where
   sqlValueSyntax tm = SqliteValueSyntax (emitValue (SQ.SQLText (fromString tmStr)))
     where tmStr = DT.formatTime DT.defaultTimeLocale (DT.iso8601DateFormat (Just "%H:%M:%S%Q")) tm
 
+data ShaCheckMixinT f
+  = ShaCheck
+  { _sha_check_time :: Columnar f UTCTime
+  , _mod_time  :: Columnar f UTCTime
+  , _file_size :: Columnar f Int
+  , _actual_checksum  :: Columnar f Text -- i.e. on-disk checksum, not necessarily the plaintext checksum.
+  } deriving (Generic)
+
+type ShaCheck = ShaCheckMixinT Identity
+deriving instance Show ShaCheck
+deriving instance Eq ShaCheck
+deriving instance Show (ShaCheckMixinT (Nullable Identity)) -- This alwasy required?
+deriving instance Eq (ShaCheckMixinT (Nullable Identity))
+instance Beamable ShaCheckMixinT
+
 -- | The Beam version
-data BFileCheckT f
-    = BFileCheck
-    { _bcheckid :: Columnar f (Auto Int)
-    , _bchecktime    :: Columnar f UTCTime
-    , _bfilemachine  :: Columnar f Text
+data FileInfoT f
+    = FileInfo
+    { _file_status_id :: Columnar f (Auto Int)
+    , _entered        :: Columnar f UTCTime
+    , _exited         :: Columnar f (Maybe UTCTime)
+    , _file_machine   :: Columnar f Text
+    , _file_path      :: Columnar f Text -- the entire absolute filepath
+    , _file_root      :: Columnar f Text -- absolute path
+    , _file_offset    :: Columnar f Text -- relative to root
+    , _file_name      :: Columnar f Text
+    , _sha_check :: ShaCheckMixinT (Nullable f)
     }
-    {- _bchecktime     :: Columnar f DTC.UTCTime
-    , _bfilepath :: Columnar f FilePath
-    , _bfileroot  :: Columnar f FilePath
-    , _bfileoffset  :: Columnar f FilePath
-    , _bfilename  :: Columnar f FilePath
-    , _bfilemachine  :: Columnar f Text
-    -}
     deriving (Generic)
 
-type BFileCheck = BFileCheckT Identity
-type BFileCheckId = PrimaryKey BFileCheckT Identity
-
-deriving instance Show BFileCheck
-deriving instance Eq BFileCheck
-instance Beamable BFileCheckT
-instance Table BFileCheckT where
-  data PrimaryKey BFileCheckT f = BFileCheckId (Columnar f (Auto Int)) deriving Generic
-  primaryKey = BFileCheckId . _bcheckid
-instance Beamable (PrimaryKey BFileCheckT)
-
-data BFileDB f = BFileDB
-  { _bFileChecks :: f (TableEntity BFileCheckT)
+data FileShaCheckT f = FileShaCheck
+  {
   } deriving (Generic)
-instance Database BFileDB
 
-bFileDB :: DatabaseSettings be BFileDB
-bFileDB = defaultDbSettings
+type FileInfo = FileInfoT Identity
+type FileInfoId = PrimaryKey FileInfoT Identity
+
+deriving instance Show FileInfo
+deriving instance Eq FileInfo
+instance Beamable FileInfoT
+instance Table FileInfoT where
+  data PrimaryKey FileInfoT f = FileInfoId (Columnar f (Auto Int)) deriving Generic
+  primaryKey = FileInfoId . _file_status_id
+instance Beamable (PrimaryKey FileInfoT)
+
+data FileDB f = FileDB
+  { _fileChecks :: f (TableEntity FileInfoT)
+  } deriving (Generic)
+instance Database FileDB
+
+fileDB :: DatabaseSettings be FileDB
+fileDB = defaultDbSettings
 
 ---- Couldn't get this stuff to work.
 data FileEventParseError =
@@ -205,7 +223,7 @@ data FileEventParseError =
 
 instance CE.Exception FileEventParseError
 
-instance SQS.FromRow FileCheck where
+instance SQS.FromRow FileCheckOld where
   fromRow = do
     (time, path, root, offset, name, machine, tag, modtime, filesize, checksum, errmsg) <-
       ((,,,,,,,,,,) <$> SQS.field <*> SQS.field <*> SQS.field <*> SQS.field <*>
@@ -227,7 +245,7 @@ instance SQS.FromRow FileCheck where
                                    , Maybe T.Text
                                    , Maybe T.Text)
     return
-      (FileCheck
+      (FileCheckOld
          time
          (fromText path)
          (fromText root)
@@ -251,8 +269,8 @@ instance SQS.FromRow FileCheck where
                   (T.pack (show (modtime, filesize, checksum, errmsg))) -- could we hook into builtin parsing error stuff? MT.lift (MT.lift (SQOK.Errors [CE.toException MismatchedTag]))
                   ))))
 
-instance SQ.ToRow FileCheck where
-  toRow (FileCheck { _checktime
+instance SQ.ToRow FileCheckOld where
+  toRow (FileCheckOld { _checktime
                    , _filepath
                    , _fileroot
                    , _fileoffset
@@ -333,16 +351,16 @@ cheapDiff leftPath rightPath = do leftMap <- fold (filterRegularFiles (lstree le
                                           concat (HashMap.elems (HashMap.difference rightMap leftMap)))
 
 -- | returns a FoldM that writes a list of FileEvents to SQLite, opens and closes connection for us.
-writeDB :: MonadIO io => SQ.Connection -> FoldM io FileCheck ()
+writeDB :: MonadIO io => SQ.Connection -> FoldM io FileCheckOld ()
 writeDB conn = F.FoldM step (return ()) (\_ -> return ()) where
   step _ fe = do liftIO (SQ.execute conn "INSERT INTO main_file_checks (time, path, tag, modtime, filesize, checksum, errmsg) VALUES (?,?,?,?,?,?,?)" fe)
 
 -- | Converts a filepath to a FileAdd
-checkFile :: MonadIO io => DTC.UTCTime -> FilePath -> FileStatus -> io FileCheck
+checkFile :: MonadIO io => DTC.UTCTime -> FilePath -> FileStatus -> io FileCheckOld
 checkFile now fp stat = do
   (size, hash) <- inSizeAndSha fp
   return
-    (FileCheck
+    (FileCheckOld
        now
        fp
        fp
