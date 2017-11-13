@@ -170,7 +170,7 @@ data ShaCheckT f
   , _mod_time  :: Columnar f UTCTime
   , _file_size :: Columnar f Int
   , _actual_checksum  :: Columnar f Text -- i.e. on-disk checksum, not necessarily the plaintext checksum.
-  , _sc_file_info_id :: Columnar f FileInfoId
+  , _sc_file_info_id :: PrimaryKey FileInfoT f -- Columnar f FileInfoId
   } deriving (Generic)
 
 type ShaCheck = ShaCheckT Identity
@@ -378,6 +378,35 @@ mkShaCheck now fileInfoId fp stat = do
      , _actual_checksum = (T.pack (show hash))
      , _sc_file_info_id = fileInfoId
      })
+
+unsafeFPToText path =
+  case FP.toText path of
+    Left err -> error ("Can't decode path: " ++ show err)
+    Right path -> path
+
+-- not safe if machine has colons in it.
+fileInfoId :: Text -> FilePath -> Text
+fileInfoId machine path = T.intercalate ":" [machine, unsafeFPToText path]
+
+
+checkFile2 :: SQ.Connection -> Text -> FilePath -> Shell ()
+checkFile2 conn machine path =
+  case FP.toText path of
+    Left err -> echo (repr ("Can't decode path for checkFile: " ++ show err))
+    Right pathText -> do
+      idk <-
+        (liftIO
+           (withDatabaseDebug
+              putStrLn
+              conn
+              (runSelectReturningList
+                 (select
+                    (do fileInfo <- all_ (_fileInfoT fileDB)
+                        guard_
+                          (((_file_path fileInfo) ==. val_ pathText) &&.
+                           ((_file_machine fileInfo) ==. val_ machine))
+                        pure fileInfo)))))
+      return ()
 
 -- mkFileInfo :: MonadIO io => (Maybe ShaCheck) -> ShaCheck -> (Maybe FileInfo) -> (Maybe FileInfo)
 -- mkFileInfo = undefined
