@@ -170,6 +170,7 @@ data ShaCheckT f
   , _mod_time  :: Columnar f UTCTime
   , _file_size :: Columnar f Int
   , _actual_checksum  :: Columnar f Text -- i.e. on-disk checksum, not necessarily the plaintext checksum.
+  , _sc_file_info_id :: Columnar f FileInfoId
   } deriving (Generic)
 
 type ShaCheck = ShaCheckT Identity
@@ -177,10 +178,10 @@ type ShaCheckId = PrimaryKey ShaCheckT Identity
 
 deriving instance Show ShaCheck
 deriving instance Eq ShaCheck
-deriving instance Show (ShaCheckT (Nullable Identity)) -- This always required for a nullable mixin?
-deriving instance Eq (ShaCheckT (Nullable Identity))
-deriving instance Show (PrimaryKey ShaCheckT (Nullable Identity))
-deriving instance Eq (PrimaryKey ShaCheckT (Nullable Identity))
+-- deriving instance Show (ShaCheckT (Nullable Identity)) -- This always required for a nullable mixin?
+-- deriving instance Eq (ShaCheckT (Nullable Identity))
+-- deriving instance Show (PrimaryKey ShaCheckT (Nullable Identity))
+-- deriving instance Eq (PrimaryKey ShaCheckT (Nullable Identity))
 instance Beamable ShaCheckT
 instance Table ShaCheckT where
   data PrimaryKey ShaCheckT f = ShaCheckId (Columnar f (Auto Int)) deriving Generic
@@ -190,35 +191,34 @@ instance Beamable (PrimaryKey ShaCheckT)
 -- | The Beam version
 data FileInfoT f
     = FileInfo
-    { _file_status_id :: Columnar f (Auto Int)
-    , _entered        :: Columnar f UTCTime
+    { _file_info_id :: Columnar f Text
+    , _seen_change    :: Columnar f UTCTime -- Last time we've seen the contents change, to warrant a sync.
     , _exited         :: Columnar f (Maybe UTCTime)
     , _file_machine   :: Columnar f Text
     , _file_path      :: Columnar f Text -- the entire absolute filepath
     , _file_root      :: Columnar f Text -- absolute path
     , _file_offset    :: Columnar f Text -- relative to root
     , _file_name      :: Columnar f Text
-    , _sha_check :: PrimaryKey ShaCheckT (Nullable f)
     }
     deriving (Generic)
-
-data FileShaCheckT f = FileShaCheck
-  {
-  } deriving (Generic)
 
 type FileInfo = FileInfoT Identity
 type FileInfoId = PrimaryKey FileInfoT Identity
 
 deriving instance Show FileInfo
+deriving instance Show FileInfoId
 deriving instance Eq FileInfo
+deriving instance Eq FileInfoId
 instance Beamable FileInfoT
-instance Table FileInfoT where
-  data PrimaryKey FileInfoT f = FileInfoId (Columnar f (Auto Int)) deriving Generic
-  primaryKey = FileInfoId . _file_status_id
 instance Beamable (PrimaryKey FileInfoT)
+instance Table FileInfoT where
+  data PrimaryKey FileInfoT f = FileInfoId (Columnar f Text) deriving Generic
+  primaryKey = FileInfoId . _file_info_id
+
 
 data FileDB f = FileDB
-  { _fileChecks :: f (TableEntity FileInfoT)
+  { _fileInfoT :: f (TableEntity FileInfoT)
+  , _shaCheckT :: f (TableEntity ShaCheckT)
   } deriving (Generic)
 instance Database FileDB
 
@@ -265,7 +265,7 @@ instance SQS.FromRow FileCheckOld where
             ("Stats", Just modtime, Just filesize, Just checksum, Nothing) ->
               (FileStats
                  (FileStatsR
-                  { _modtime = modtime
+                   { _modtime = modtime
                   , _filesize = filesize
                   , _checksum = checksum
                   }))
@@ -365,23 +365,25 @@ writeDB conn = F.FoldM step (return ()) (\_ -> return ()) where
   step _ fe = do liftIO (SQ.execute conn "INSERT INTO main_file_checks (time, path, tag, modtime, filesize, checksum, errmsg) VALUES (?,?,?,?,?,?,?)" fe)
 
 -- | Converts a filepath to a FileAdd
-checkFile :: MonadIO io => DTC.UTCTime -> FilePath -> FileStatus -> io FileCheckOld
-checkFile now fp stat = do
+mkShaCheck :: MonadIO io => DTC.UTCTime -> FileInfoId  -> FilePath -> FileStatus -> io ShaCheck
+mkShaCheck now fileInfoId fp stat = do
+  let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
   (size, hash) <- inSizeAndSha fp
   return
-    (FileCheckOld
-       now
-       fp
-       fp
-       fp
-       fp
-       thisMachine
-       (FileStats
-          (FileStatsR
-           { _modtime = POSIX.posixSecondsToUTCTime (modificationTime stat)
-           , _filesize = size
-           , _checksum = (T.pack (show hash))
-           })))
+    (ShaCheck
+     { _sha_check_id = (Auto Nothing)
+     , _sha_check_time = now
+     , _mod_time = modTime
+     , _file_size = size
+     , _actual_checksum = (T.pack (show hash))
+     , _sc_file_info_id = fileInfoId
+     })
+
+-- mkFileInfo :: MonadIO io => (Maybe ShaCheck) -> ShaCheck -> (Maybe FileInfo) -> (Maybe FileInfo)
+-- mkFileInfo = undefined
+
+checkFile :: UTCTime -> FilePath -> FileStatus -> Shell FileCheckOld
+checkFile = undefined
 
 -- | writes a ls tree of checksums to a sqlite db, storing check time, modtime,
 -- filesize and sha.  TODO: We could add an optimization so we only do the
