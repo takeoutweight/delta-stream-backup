@@ -8,6 +8,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Backup where
 
@@ -35,6 +36,8 @@ import Data.Typeable (Typeable, typeOf)
 import Database.Beam
 import qualified Database.Beam as Beam
 import Database.Beam.Sqlite
+import qualified Database.Beam.Backend.SQL as DBS
+import qualified Database.Beam.Backend.Types as DBT
 import Database.Beam.Backend.SQL.SQL92
 import qualified Database.Beam.Sqlite.Syntax as BSS
 import qualified Database.SQLite.Simple as SQ
@@ -388,25 +391,42 @@ unsafeFPToText path =
 fileInfoId :: Text -> FilePath -> Text
 fileInfoId machine path = T.intercalate ":" [machine, unsafeFPToText path]
 
+-- | Returns Nothing if there are more than one, Just (Nothing) if there are
+-- none, or Just (Just x) if there is one.
+-- selectOne :: (MonadBeam syntax be handle m, FromBackendRow be a) => syntax -> m (Maybe (Maybe a))
+selectOne :: (MonadBeam cmd be handle m, FromBackendRow be a, IsSql92Syntax cmd) => SqlSelect (Sql92SelectSyntax cmd) t -> m (Maybe (Maybe a))
+selectOne (SqlSelect s) =
+  DBS.runReturningMany (selectCmd s) $ \next -> do
+    a <- next
+    case a of
+      Nothing -> pure (Just Nothing)
+      Just x -> do
+        a' <- next
+        case a' of
+          Nothing -> pure (Just (Just x))
+          Just _ -> pure Nothing
 
 checkFile2 :: SQ.Connection -> Text -> FilePath -> Shell ()
 checkFile2 conn machine path =
   case FP.toText path of
     Left err -> echo (repr ("Can't decode path for checkFile: " ++ show err))
     Right pathText -> do
-      idk <-
+      result :: Maybe (Maybe FileInfo) <-
         (liftIO
            (withDatabaseDebug
               putStrLn
               conn
-              (runSelectReturningList
+              (selectOne
                  (select
                     (do fileInfo <- all_ (_fileInfoT fileDB)
                         guard_
                           (((_file_path fileInfo) ==. val_ pathText) &&.
                            ((_file_machine fileInfo) ==. val_ machine))
                         pure fileInfo)))))
-      return ()
+      (case result of
+        Nothing -> echo "Many existed! Error!"
+        Just Nothing -> echo "None existed yet, Nice."
+        Just a -> echo "Found one")
 
 -- mkFileInfo :: MonadIO io => (Maybe ShaCheck) -> ShaCheck -> (Maybe FileInfo) -> (Maybe FileInfo)
 -- mkFileInfo = undefined
