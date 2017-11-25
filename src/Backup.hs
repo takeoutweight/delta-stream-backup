@@ -17,7 +17,6 @@ import qualified Control.Exception as CE
 import qualified Control.Foldl as F
 import Control.Monad
 import qualified Control.Monad.Managed as MM
-import qualified Control.Monad.Trans.Class as MT
 import qualified Crypto.Hash as CH
 import qualified Crypto.Hash.Algorithms as CHA
 import qualified Data.ByteString as BS
@@ -25,35 +24,25 @@ import qualified Data.ByteString.Builder as BSB
 import qualified Data.DList as DL
 import qualified Data.HashMap.Strict as HashMap
 import Data.HashMap.Strict (HashMap)
-import qualified Data.List as List
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Time as DT
 import Data.Time.Clock (UTCTime)
 import qualified Data.Time.Clock as DTC
 import qualified Data.Time.Clock.POSIX as POSIX
-import qualified Data.Time.LocalTime as DTL
-import Data.Typeable (Typeable, typeOf)
+import Data.Typeable (Typeable)
 import Database.Beam
-import qualified Database.Beam as Beam
-import qualified Database.Beam.Query as DBQ
-import qualified Database.Beam.Query.Internal as DBQI
 import Database.Beam.Sqlite
 import qualified Database.Beam.Backend.SQL as DBS
-import qualified Database.Beam.Backend.Types as DBT
 import Database.Beam.Backend.SQL.SQL92
 import qualified Database.Beam.Sqlite.Syntax as BSS
 import qualified Database.SQLite.Simple as SQ
-import qualified Database.SQLite.Simple.FromField as SQF
 import qualified Database.SQLite.Simple.ToField as SQTF
 import qualified Database.SQLite.Simple.FromRow as SQS
-import qualified Database.SQLite.Simple.Ok as SQOK
 import qualified DBHelpers as DB
 import qualified Filesystem.Path.CurrentOS as FP
 import Prelude hiding (FilePath, head)
-import qualified System.IO.Error as IOE
 import Turtle hiding (select)
-import qualified Turtle as Turtle
 import qualified Turtle.Bytes as TB
 
 shasum :: Fold BS.ByteString (CH.Digest CHA.SHA1)
