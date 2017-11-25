@@ -48,3 +48,19 @@ selectOne ::
 selectOne conn query =
   (CM.liftIO
      (DBS.withDatabaseDebug putStrLn conn (selectOne' (DBQ.select query))))
+
+{-
+-- Database.Beam.Sqlite.Syntax specializes IsSql92SelectTableSyntax SqliteSelectTableSyntax
+all_
+  :: (Database db,
+      Table table) =>
+     DatabaseEntity be db (TableEntity table)
+     -> Q SqliteSelectSyntax
+          db
+          s
+          (table (QExpr
+                    (SqliteExpressionSyntax
+                       (SqliteProjectionSyntax
+                          SqliteSelectSyntax))
+                    s))
+-}
