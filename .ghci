@@ -1,6 +1,6 @@
 :set -fobject-code
 :set -XOverloadedStrings
-import qualified DBHelpers as DB
+-- import qualified DBHelpers as DB
 import Database.Beam
 import Turtle hiding (select)
 import Prelude hiding (FilePath, head)
