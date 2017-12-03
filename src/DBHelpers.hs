@@ -90,8 +90,11 @@ withSavepoint :: (CM.MonadIO io, Catch.MonadMask io) => SQ.Connection -> io a ->
 withSavepoint conn action =
   Catch.mask $ \restore -> do
     idInt <- CM.liftIO Random.randomIO
-    let savepoint = SQ.Only ("svpt-" ++ show (mod idInt (1000000000 :: Int)))
+    let savepoint = SQ.Only ("svpt" ++ show (mod idInt (1000000000 :: Int)))
     CM.liftIO (SQ.execute conn "SAVEPOINT ?" savepoint)
     r <- (restore action) `Catch.onException` (CM.liftIO (SQ.execute conn "ROLLBACK TO ?" savepoint))
     CM.liftIO (SQ.execute conn "RELEASE ?" savepoint)
     return r
+
+-- TODO: make a Database.Beam.Sqlite.Connection.runInsertReturningList using withSavepoint
+-- Or just a non-list-returning one at least to shorten up that super long one I have to write.

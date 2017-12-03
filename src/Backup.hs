@@ -14,6 +14,7 @@
 module Backup where
 
 import qualified Control.Exception as CE
+import qualified Control.Monad.Catch as Catch
 import qualified Control.Foldl as F
 import Control.Monad
 import qualified Control.Monad.Managed as MM
@@ -186,7 +187,7 @@ instance Beamable (PrimaryKey ShaCheckT)
 -- | The Beam version
 data FileInfoT f
     = FileInfo
-    { _file_info_id :: Columnar f Text
+    { _file_info_id   :: Columnar f Text
     , _seen_change    :: Columnar f UTCTime -- Last time we've seen the contents change, to warrant a sync.
     , _exited         :: Columnar f (Maybe UTCTime)
     , _file_machine   :: Columnar f Text
@@ -374,19 +375,40 @@ mkShaCheck now fileInfoId fp stat = do
      , _sc_file_info_id = fileInfoId
      })
 
+data PathToTextException = PathToTextException
+  { path :: FilePath
+  , errMsg :: !Text
+  } deriving (Show, Typeable)
+instance CE.Exception PathToTextException
+
 unsafeFPToText path =
   case FP.toText path of
-    Left err -> error ("Can't decode path: " ++ show err)
+    Left err -> CE.throw (PathToTextException path err)
     Right path -> path
 
 -- not safe if machine has colons in it.
 fileInfoId :: Text -> FilePath -> Text
 fileInfoId machine path = T.intercalate ":" [machine, unsafeFPToText path]
 
+-- TODO : Actually split this path up!
+mkFileInfo :: Text -> UTCTime -> FileInfo
+mkFileInfo fp now =
+  let path = T.intercalate ":" [thisMachine, fp]
+  in FileInfo
+     { _file_info_id = path
+     , _seen_change = now
+     , _exited = Nothing
+     , _file_machine = path
+     , _file_path = path
+     , _file_root = path
+     , _file_offset = path
+     , _file_name = path
+     }
+
 checkFile2 :: SQ.Connection -> Text -> FilePath -> Shell ()
 checkFile2 conn machine path =
   case FP.toText path of
-    Left err -> echo (repr ("Can't decode path for checkFile: " ++ show err))
+    Left msg -> err (repr ("Can't decode path for checkFile: " ++ show msg))
     Right pathText -> do
       result :: Maybe (Maybe FileInfo) <-
         (DB.selectOne
@@ -398,19 +420,23 @@ checkFile2 conn machine path =
                pure fileInfo))
       liftIO (SQ.execute_ conn "SAVEPOINT Backup-checkFile2")
       (case result of
-         Nothing -> echo "Many existed! Error!"
-         -- TODO : Make one, (need path splitting function) continue with next branch
+         Nothing -> err (repr ("Many existed!? Error!" ++ show path))
          Just Nothing -> do
            echo "None existed yet, Nice."
+             -- Maybe I should stat the file first to make sure it's acutally there, then I know my "_seen_change" will always be accurate (if it's not there and I don't have an entry, don't bother adding it. But we'll need the stat later too so we may as well always stat it.)
+           now <- date
            liftIO
              (withDatabaseDebug
                 putStrLn
                 conn
-                (runInsert (insert (_fileInfoT fileDB) (insertValues []))))
-         -- TODO : sha-check it, and link it to this existing fileInfo,
-         -- possibly update the seen_change time (if it's new, or if it has changed)
-         -- possibly mark it "exited" if it's gone
+                (runInsert
+                   (insert
+                      (_fileInfoT fileDB)
+                      (insertValues [mkFileInfo pathText now]))))
          Just a -> echo "Found one")
+                 -- TODO : sha-check it, and link it to this existing fileInfo,
+                 -- possibly update the seen_change time (if it's new, or if it has changed)
+                 -- possibly mark it "exited" if it's gone
       liftIO (SQ.execute_ conn "RELEASE Backup-checkFile2")
 
 -- mkFileInfo :: MonadIO io => (Maybe ShaCheck) -> ShaCheck -> (Maybe FileInfo) -> (Maybe FileInfo)
