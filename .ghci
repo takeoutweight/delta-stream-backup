@@ -1,3 +1,4 @@
+-- I seem to have to set this manually in intero to get it to stop transitively recompiling?
 :set -fobject-code
 :set -XOverloadedStrings
 -- import qualified DBHelpers as DB
