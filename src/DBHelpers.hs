@@ -3,6 +3,7 @@
 
 module DBHelpers where
 
+import qualified Control.Monad.Catch as Catch
 import qualified Control.Monad.IO.Class as CM
 import qualified Database.Beam as DB
 import qualified Database.Beam.Backend.SQL as DBS
@@ -15,6 +16,7 @@ import qualified Database.Beam.Sqlite as DBS -- Doesn't like my selectOne type
 import qualified Database.Beam.Sqlite.Syntax as DBSS
 import qualified Database.Beam.Sqlite.Types as DBST
 import qualified Database.SQLite.Simple as SQ
+import qualified System.Random as Random
 
 -- | Returns Nothing if there are more than one, Just (Nothing) if there are
 -- none, or Just (Just x) if there is one.
@@ -82,3 +84,14 @@ myAll_
                          select)) -- DBSS.SqliteSelectSyntax
                     s))
 myAll_ = DBQ.all_
+
+-- | Executes the action w/in a savepoint, exceptions rollback.
+withSavepoint :: (CM.MonadIO io, Catch.MonadMask io) => SQ.Connection -> io a -> io a
+withSavepoint conn action =
+  Catch.mask $ \restore -> do
+    idInt <- CM.liftIO Random.randomIO
+    let savepoint = SQ.Only ("svpt-" ++ show (mod idInt (1000000000 :: Int)))
+    CM.liftIO (SQ.execute conn "SAVEPOINT ?" savepoint)
+    r <- (restore action) `Catch.onException` (CM.liftIO (SQ.execute conn "ROLLBACK TO ?" savepoint))
+    CM.liftIO (SQ.execute conn "RELEASE ?" savepoint)
+    return r

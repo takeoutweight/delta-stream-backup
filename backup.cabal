@@ -16,6 +16,7 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Backup
+  other-modules:       DBHelpers
   build-depends:       base >= 4.7 && < 5
                      , beam-core
                      , beam-sqlite
@@ -23,9 +24,11 @@ library
                      , bytestring
                      , cryptonite
                      , dlist
+                     , exceptions
                      , text
                      , foldl
                      , managed
+                     , random
                      , time
                      , transformers
                      , turtle

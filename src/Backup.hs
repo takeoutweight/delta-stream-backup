@@ -33,7 +33,6 @@ import qualified Data.Time.Clock.POSIX as POSIX
 import Data.Typeable (Typeable)
 import Database.Beam
 import Database.Beam.Sqlite
-import qualified Database.Beam.Backend.SQL as DBS
 import Database.Beam.Backend.SQL.SQL92
 import qualified Database.Beam.Sqlite.Syntax as BSS
 import qualified Database.SQLite.Simple as SQ
@@ -397,10 +396,22 @@ checkFile2 conn machine path =
                  (((_file_path fileInfo) ==. val_ pathText) &&.
                   ((_file_machine fileInfo) ==. val_ machine))
                pure fileInfo))
+      liftIO (SQ.execute_ conn "SAVEPOINT Backup-checkFile2")
       (case result of
          Nothing -> echo "Many existed! Error!"
-         Just Nothing -> echo "None existed yet, Nice."
+         -- TODO : Make one, (need path splitting function) continue with next branch
+         Just Nothing -> do
+           echo "None existed yet, Nice."
+           liftIO
+             (withDatabaseDebug
+                putStrLn
+                conn
+                (runInsert (insert (_fileInfoT fileDB) (insertValues []))))
+         -- TODO : sha-check it, and link it to this existing fileInfo,
+         -- possibly update the seen_change time (if it's new, or if it has changed)
+         -- possibly mark it "exited" if it's gone
          Just a -> echo "Found one")
+      liftIO (SQ.execute_ conn "RELEASE Backup-checkFile2")
 
 -- mkFileInfo :: MonadIO io => (Maybe ShaCheck) -> ShaCheck -> (Maybe FileInfo) -> (Maybe FileInfo)
 -- mkFileInfo = undefined
