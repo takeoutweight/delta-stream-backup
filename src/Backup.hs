@@ -41,10 +41,23 @@ import qualified Database.SQLite.Simple.ToField as SQTF
 import qualified Database.SQLite.Simple.FromRow as SQS
 import qualified DBHelpers as DB
 import qualified Filesystem.Path.CurrentOS as FP
+import qualified System.IO.Error as Error
 import Prelude hiding (FilePath, head)
-import qualified System.FilePath as SFP
 import Turtle hiding (select)
 import qualified Turtle.Bytes as TB
+
+  -- Catch.catch :: (CE.Exception e) => Shell a -> (e -> Shell a) -> Shell a
+  -- working off https://hackage.haskell.org/package/turtle-1.4.5/docs/src/Turtle-Prelude.html#nl
+-- instance Catch.MonadThrow Shell where
+--   throwM = \e -> liftIO (CE.throwIO e)
+-- instance Catch.MonadCatch Shell where
+--   catch s = Shell _foldIO'
+--     where
+--       _foldIO' (FoldM step begin done) = _foldIO s (FoldM step' begin' done')
+--         where
+--           step' st item = step st item -- confusing thing, we get to "pick" what the "items" are for the "passed in" fold? TODO This isn't right yet.
+--           begin' = begin
+--           done' state = done state
 
 shasum :: Fold BS.ByteString (CH.Digest CHA.SHA1)
 shasum =
@@ -397,42 +410,37 @@ fileInfoId machine path = T.intercalate ":" [machine, unsafeFPToText path]
 ensureTrailingSlash :: FilePath -> FilePath
 ensureTrailingSlash fp = fp FP.</> ""
 
--- | Given the relative path
-mkFileInfo :: Text -> Text -> FilePath -> UTCTime -> FileInfo
-mkFileInfo id archive path now =
-  FileInfo
-  { _file_info_id = id
-  , _seen_change = now
-  , _exited = Nothing
-  , _archive = archive
-  , _file_path = unsafeFPToText path  -- assuming we've already ToText'ed the path to make the id.
-  , _file_name = unsafeFPToText (filename path)
-  }
-
+-- | Given an absolute path, check it - creating the required logical entry if needed.
 checkFile2 :: SQ.Connection -> Text -> FilePath -> FilePath -> Shell ()
-checkFile2 conn archive root path =
-  case stripPrefix (ensureTrailingSlash root) path of
+checkFile2 conn archive root absPath =
+  case stripPrefix (ensureTrailingSlash root) absPath of
     Nothing ->
       err
         (repr
-           ("Can't determine relative Path: " ++ show root ++ "," ++ show path))
+           ("Can't determine relative Path: " ++
+            show root ++ "," ++ show absPath))
     Just relative ->
-      (case FP.toText relative of
-         Left msg ->
-           err (repr ("Can't decode path for relative Path: " ++ show msg))
-         Right relText ->
+      (case ( FP.toText relative
+            , FP.toText absPath
+            , FP.toText (filename absPath)) of
+         (Right relText, Right pathText, Right nameText) ->
            let fileInfoID = (T.intercalate ":" [archive, relText])
-           in (do result :: Maybe (Maybe FileInfo) <-
+           in (do fileStatus :: Either () FileStatus <-
+                    liftIO
+                      (Catch.tryJust
+                         (guard . Error.isDoesNotExistError)
+                         (stat absPath))
+                  result :: Maybe (Maybe FileInfo) <-
                     (DB.selectOne
                        conn
                        (do fileInfo <- all_ (_fileInfoT fileDB)
                            guard_ ((_file_info_id fileInfo) ==. val_ fileInfoID)
                            pure fileInfo))
                   liftIO (SQ.execute_ conn "SAVEPOINT Backup-checkFile2")
-                  (case result of
-                     Nothing ->
-                       err (repr ("Many existed!? Error!" ++ show path))
-                     Just Nothing -> do
+                  (case (result, fileStatus) of
+                     (Nothing, _) ->
+                       err (repr ("Many existed!? Error!" ++ show absPath))
+                     (Just Nothing, Right status) -> do
                        echo "None existed yet, Nice."
                 -- Maybe I should stat the file first to make sure it's acutally there, then I know my "_seen_change" will always be accurate (if it's not there and I don't have an entry, don't bother adding it. But we'll need the stat later too so we may as well always stat it.)
                        now <- date
@@ -444,17 +452,26 @@ checkFile2 conn archive root path =
                                (insert
                                   (_fileInfoT fileDB)
                                   (insertValues
-                                     [ mkFileInfo
-                                         fileInfoID
-                                         archive
-                                         relative
-                                         now
+                                     [ FileInfo
+                                       { _file_info_id = fileInfoID
+                                       , _seen_change = now
+                                       , _exited = Nothing
+                                       , _archive = archive
+                                       , _file_path = pathText
+                                       , _file_name = nameText
+                                       }
                                      ]))))
-                     Just a -> echo "Found one")
+                     (Just Nothing, Left _) -> return () -- didn't find it, but didn't have a record of it either.
+                     (Just a, maybeStatus) -> echo "Found one")
                     -- TODO : sha-check it, and link it to this existing fileInfo,
                     -- possibly update the seen_change time (if it's new, or if it has changed)
                     -- possibly mark it "exited" if it's gone
-                  liftIO (SQ.execute_ conn "RELEASE Backup-checkFile2")))
+                  liftIO (SQ.execute_ conn "RELEASE Backup-checkFile2"))
+         a ->
+           err
+             (repr
+                ("Can't textify path: " ++
+                 show root ++ ", " ++ show absPath ++ " : " ++ show a)))
 
 -- mkFileInfo :: MonadIO io => (Maybe ShaCheck) -> ShaCheck -> (Maybe FileInfo) -> (Maybe FileInfo)
 -- mkFileInfo = undefined
@@ -487,4 +504,4 @@ createDB filename =
 -- DROP TABLE file_checks
 -- SQ.query_ conn "SELECT time, path, type, checksum from main_file_events" :: IO [FileEvent]
 -- um :: FileArchive -> FilePath -> (FileArchive, FileEvent)
--- :set -XOverloadedStrings
+-- o:set -XOverloadedStrings
