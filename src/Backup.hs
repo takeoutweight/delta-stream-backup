@@ -42,6 +42,7 @@ import qualified Database.SQLite.Simple.FromRow as SQS
 import qualified DBHelpers as DB
 import qualified Filesystem.Path.CurrentOS as FP
 import Prelude hiding (FilePath, head)
+import qualified System.FilePath as SFP
 import Turtle hiding (select)
 import qualified Turtle.Bytes as TB
 
@@ -136,6 +137,7 @@ data FileInfoOld
   deriving (Show)
 
 thisMachine = "Nathans-MacBook-Pro-2" :: T.Text
+thisArchive = "main-archive" :: T.Text
 
 data FileCheckOld = FileCheckOld
   { _checktime :: !DTC.UTCTime
@@ -163,6 +165,7 @@ data ShaCheckT f
   = ShaCheck
   { _sha_check_id :: Columnar f (Auto Int)
   , _sha_check_time :: Columnar f UTCTime
+  , _file_machine   :: Columnar f Text
   , _mod_time  :: Columnar f UTCTime
   , _file_size :: Columnar f Int
   , _actual_checksum  :: Columnar f Text -- i.e. on-disk checksum, not necessarily the plaintext checksum.
@@ -190,11 +193,9 @@ data FileInfoT f
     { _file_info_id   :: Columnar f Text
     , _seen_change    :: Columnar f UTCTime -- Last time we've seen the contents change, to warrant a sync.
     , _exited         :: Columnar f (Maybe UTCTime)
-    , _file_machine   :: Columnar f Text
-    , _file_path      :: Columnar f Text -- the entire absolute filepath
-    , _file_root      :: Columnar f Text -- absolute path
-    , _file_offset    :: Columnar f Text -- relative to root
-    , _file_name      :: Columnar f Text
+    , _archive        :: Columnar f Text -- TODO Ref to an "archive" table - each machine can locate each archive on different mountpoints, which is not important, but the path relative to the archive root IS semantic and reflected on all remotes.
+    , _file_path      :: Columnar f Text -- relative to archive root, including filename, so we can determine "the same file" in different remotes.
+    , _file_name      :: Columnar f Text -- Just for convenience, for use w/ `locate` or dedup etc.
     }
     deriving (Generic)
 
@@ -369,6 +370,7 @@ mkShaCheck now fileInfoId fp stat = do
     (ShaCheck
      { _sha_check_id = (Auto Nothing)
      , _sha_check_time = now
+     , _file_machine = thisMachine
      , _mod_time = modTime
      , _file_size = size
      , _actual_checksum = (T.pack (show hash))
@@ -390,54 +392,69 @@ unsafeFPToText path =
 fileInfoId :: Text -> FilePath -> Text
 fileInfoId machine path = T.intercalate ":" [machine, unsafeFPToText path]
 
--- TODO : Actually split this path up!
-mkFileInfo :: Text -> UTCTime -> FileInfo
-mkFileInfo fp now =
-  let path = T.intercalate ":" [thisMachine, fp]
-  in FileInfo
-     { _file_info_id = path
-     , _seen_change = now
-     , _exited = Nothing
-     , _file_machine = path
-     , _file_path = path
-     , _file_root = path
-     , _file_offset = path
-     , _file_name = path
-     }
+-- | FilePath seems to only treat paths with trailing slashes as "directories"
+-- but eg `pwd` doesn't give a trailing slash.
+ensureTrailingSlash :: FilePath -> FilePath
+ensureTrailingSlash fp = fp FP.</> ""
 
-checkFile2 :: SQ.Connection -> Text -> FilePath -> Shell ()
-checkFile2 conn machine path =
-  case FP.toText path of
-    Left msg -> err (repr ("Can't decode path for checkFile: " ++ show msg))
-    Right pathText -> do
-      result :: Maybe (Maybe FileInfo) <-
-        (DB.selectOne
-           conn
-           (do fileInfo <- all_ (_fileInfoT fileDB)
-               guard_
-                 (((_file_path fileInfo) ==. val_ pathText) &&.
-                  ((_file_machine fileInfo) ==. val_ machine))
-               pure fileInfo))
-      liftIO (SQ.execute_ conn "SAVEPOINT Backup-checkFile2")
-      (case result of
-         Nothing -> err (repr ("Many existed!? Error!" ++ show path))
-         Just Nothing -> do
-           echo "None existed yet, Nice."
-             -- Maybe I should stat the file first to make sure it's acutally there, then I know my "_seen_change" will always be accurate (if it's not there and I don't have an entry, don't bother adding it. But we'll need the stat later too so we may as well always stat it.)
-           now <- date
-           liftIO
-             (withDatabaseDebug
-                putStrLn
-                conn
-                (runInsert
-                   (insert
-                      (_fileInfoT fileDB)
-                      (insertValues [mkFileInfo pathText now]))))
-         Just a -> echo "Found one")
-                 -- TODO : sha-check it, and link it to this existing fileInfo,
-                 -- possibly update the seen_change time (if it's new, or if it has changed)
-                 -- possibly mark it "exited" if it's gone
-      liftIO (SQ.execute_ conn "RELEASE Backup-checkFile2")
+-- | Given the relative path
+mkFileInfo :: Text -> Text -> FilePath -> UTCTime -> FileInfo
+mkFileInfo id archive path now =
+  FileInfo
+  { _file_info_id = id
+  , _seen_change = now
+  , _exited = Nothing
+  , _archive = archive
+  , _file_path = unsafeFPToText path  -- assuming we've already ToText'ed the path to make the id.
+  , _file_name = unsafeFPToText (filename path)
+  }
+
+checkFile2 :: SQ.Connection -> Text -> FilePath -> FilePath -> Shell ()
+checkFile2 conn archive root path =
+  case stripPrefix (ensureTrailingSlash root) path of
+    Nothing ->
+      err
+        (repr
+           ("Can't determine relative Path: " ++ show root ++ "," ++ show path))
+    Just relative ->
+      (case FP.toText relative of
+         Left msg ->
+           err (repr ("Can't decode path for relative Path: " ++ show msg))
+         Right relText ->
+           let fileInfoID = (T.intercalate ":" [archive, relText])
+           in (do result :: Maybe (Maybe FileInfo) <-
+                    (DB.selectOne
+                       conn
+                       (do fileInfo <- all_ (_fileInfoT fileDB)
+                           guard_ ((_file_info_id fileInfo) ==. val_ fileInfoID)
+                           pure fileInfo))
+                  liftIO (SQ.execute_ conn "SAVEPOINT Backup-checkFile2")
+                  (case result of
+                     Nothing ->
+                       err (repr ("Many existed!? Error!" ++ show path))
+                     Just Nothing -> do
+                       echo "None existed yet, Nice."
+                -- Maybe I should stat the file first to make sure it's acutally there, then I know my "_seen_change" will always be accurate (if it's not there and I don't have an entry, don't bother adding it. But we'll need the stat later too so we may as well always stat it.)
+                       now <- date
+                       liftIO
+                         (withDatabaseDebug
+                            putStrLn
+                            conn
+                            (runInsert
+                               (insert
+                                  (_fileInfoT fileDB)
+                                  (insertValues
+                                     [ mkFileInfo
+                                         fileInfoID
+                                         archive
+                                         relative
+                                         now
+                                     ]))))
+                     Just a -> echo "Found one")
+                    -- TODO : sha-check it, and link it to this existing fileInfo,
+                    -- possibly update the seen_change time (if it's new, or if it has changed)
+                    -- possibly mark it "exited" if it's gone
+                  liftIO (SQ.execute_ conn "RELEASE Backup-checkFile2")))
 
 -- mkFileInfo :: MonadIO io => (Maybe ShaCheck) -> ShaCheck -> (Maybe FileInfo) -> (Maybe FileInfo)
 -- mkFileInfo = undefined
