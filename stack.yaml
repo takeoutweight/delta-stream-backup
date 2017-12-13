@@ -43,15 +43,18 @@ resolver: lts-9.4
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - '.'
-- location:
-    git: https://github.com/tathougies/beam.git
-    commit: abe473a5dc8456c611f84016c53a493f57442484
-  extra-dep: true
-  subdirs:
-    - beam-core
-    - beam-migrate
-    - beam-sqlite
-#    - beam-postgres
+- '/Users/nathan/src/haskell/beam/beam-core'
+- '/Users/nathan/src/haskell/beam/beam-migrate'
+- '/Users/nathan/src/haskell/beam/beam-sqlite'
+#- location:
+#    git: https://github.com/tathougies/beam.git
+#    commit: 3681d85b4787d468ae4ef7adeba95bdefd881036
+#  extra-dep: true
+#  subdirs:
+#    - beam-core
+#    - beam-migrate
+#    - beam-sqlite
+##    - beam-postgres
 
 # - location:
 #    git: https://github.com/tomjaguarpaw/haskell-opaleye
