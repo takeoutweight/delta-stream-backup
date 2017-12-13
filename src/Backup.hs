@@ -59,6 +59,14 @@ import qualified Turtle.Bytes as TB
 --           begin' = begin
 --           done' state = done state
 
+-- using (managed_ (bracket_ init finally))  -- i.e. you give a function taking an action.
+-- withSavepoint :: MonadManged managed => managed () 
+-- withSavepoint = CE.bracket_
+-- problem is, we'd like our action to accept Shell (not just IO) but is that ok?
+
+connection :: MM.MonadManaged managed => String -> managed SQ.Connection
+connection filename = using (managed (SQ.withConnection filename))
+
 shasum :: Fold BS.ByteString (CH.Digest CHA.SHA1)
 shasum =
   (F.Fold
@@ -405,10 +413,15 @@ unsafeFPToText path =
 fileInfoId :: Text -> FilePath -> Text
 fileInfoId machine path = T.intercalate ":" [machine, unsafeFPToText path]
 
--- | FilePath seems to only treat paths with trailing slashes as "directories"
--- but eg `pwd` doesn't give a trailing slash.
+{- | FilePath seems to only treat paths with trailing slashes as "directories" but
+     eg `pwd` doesn't give a trailing slash.
+-}
 ensureTrailingSlash :: FilePath -> FilePath
 ensureTrailingSlash fp = fp FP.</> ""
+
+-- Catch.onException -- FIXME no instance Catch.MonadMask Shell, nor Catch.MonadCatch Shell
+hypotheticalOnException :: Shell a -> Shell b -> Shell a
+hypotheticalOnException a b = a
 
 -- | Given an absolute path, check it - creating the required logical entry if needed.
 checkFile2 :: SQ.Connection -> Text -> FilePath -> FilePath -> Shell ()
@@ -425,48 +438,57 @@ checkFile2 conn archive root absPath =
             , FP.toText (filename absPath)) of
          (Right relText, Right pathText, Right nameText) ->
            let fileInfoID = (T.intercalate ":" [archive, relText])
-           in (do fileStatus :: Either () FileStatus <-
-                    liftIO
-                      (Catch.tryJust
-                         (guard . Error.isDoesNotExistError)
-                         (stat absPath))
-                  result :: Maybe (Maybe FileInfo) <-
-                    (DB.selectOne
-                       conn
-                       (do fileInfo <- all_ (_fileInfoT fileDB)
-                           guard_ ((_file_info_id fileInfo) ==. val_ fileInfoID)
-                           pure fileInfo))
-                  liftIO (SQ.execute_ conn "SAVEPOINT Backup-checkFile2")
-                  (case (result, fileStatus) of
-                     (Nothing, _) ->
-                       err (repr ("Many existed!? Error!" ++ show absPath))
-                     (Just Nothing, Right status) -> do
-                       echo "None existed yet, Nice."
-                -- Maybe I should stat the file first to make sure it's acutally there, then I know my "_seen_change" will always be accurate (if it's not there and I don't have an entry, don't bother adding it. But we'll need the stat later too so we may as well always stat it.)
-                       now <- date
-                       liftIO
-                         (withDatabaseDebug
-                            putStrLn
-                            conn
-                            (runInsert
-                               (insert
-                                  (_fileInfoT fileDB)
-                                  (insertValues
-                                     [ FileInfo
-                                       { _file_info_id = fileInfoID
-                                       , _seen_change = now
-                                       , _exited = Nothing
-                                       , _archive = archive
-                                       , _file_path = pathText
-                                       , _file_name = nameText
-                                       }
-                                     ]))))
-                     (Just Nothing, Left _) -> return () -- didn't find it, but didn't have a record of it either.
-                     (Just a, maybeStatus) -> echo "Found one")
-                    -- TODO : sha-check it, and link it to this existing fileInfo,
-                    -- possibly update the seen_change time (if it's new, or if it has changed)
-                    -- possibly mark it "exited" if it's gone
-                  liftIO (SQ.execute_ conn "RELEASE Backup-checkFile2"))
+                  -- TODO bracket this (maybe with safe-exceptions?)
+           in (do (hypotheticalOnException
+                     (do (liftIO
+                            (SQ.execute_ conn "SAVEPOINT Backup-checkFile2"))
+                         fileStatus :: Either () FileStatus <-
+                           liftIO
+                             (Catch.tryJust
+                                (guard . Error.isDoesNotExistError)
+                                (stat absPath))
+                         result :: Maybe (Maybe FileInfo) <-
+                           (DB.selectOne
+                              conn
+                              (do fileInfo <- all_ (_fileInfoT fileDB)
+                                  guard_
+                                    ((_file_info_id fileInfo) ==.
+                                     val_ fileInfoID)
+                                  pure fileInfo))
+                         (case (result, fileStatus) of
+                            (Nothing, _) ->
+                              err
+                                (repr ("Many existed!? Error!" ++ show absPath))
+                            (Just Nothing, Left _) -> return () -- didn't find the file but didn't have a record of it either.
+                            (Just Nothing, Right status) -> do
+                              echo "None existed yet, Nice."
+                              now <- date
+                              liftIO
+                                (withDatabaseDebug
+                                   putStrLn
+                                   conn
+                                   (runInsert
+                                      (insert
+                                         (_fileInfoT fileDB)
+                                         (insertValues
+                                            [ FileInfo
+                                              { _file_info_id = fileInfoID
+                                              , _seen_change = now
+                                              , _exited = Nothing
+                                              , _archive = archive
+                                              , _file_path = pathText
+                                              , _file_name = nameText
+                                              }
+                                            ]))))
+                            (Just a, maybeStatus) -> echo "Found one")
+                                 -- TODO : sha-check it, and link it to this existing fileInfo,
+                                 -- possibly update the seen_change time (if it's new, or if it has changed)
+                                 -- possibly mark it "exited" if it's gone
+                         (liftIO (SQ.execute_ conn "RELEASE Backup-checkFile2"))
+                         return ())
+                     (liftIO
+                        (do (SQ.execute_ conn "ROLLBACK TO Backup-checkFile2")
+                            (SQ.execute_ conn "RELEASE Backup-checkFile2")))))
          a ->
            err
              (repr
@@ -479,10 +501,11 @@ checkFile2 conn archive root absPath =
 checkFile :: UTCTime -> FilePath -> FileStatus -> Shell FileCheckOld
 checkFile = undefined
 
--- | writes a ls tree of checksums to a sqlite db, storing check time, modtime,
--- filesize and sha.  TODO: We could add an optimization so we only do the
--- checkFile and write if the file is new or modtime/filesize changed (or
--- checktime is too long ago to trust etc)
+{- | writes a ls tree of checksums to a sqlite db, storing check time, modtime,
+     filesize and sha.  TODO: We could add an optimization so we only do the
+     checkFile and write if the file is new or modtime/filesize changed (or
+     checktime is too long ago to trust etc)
+-}
 addTreeToDb :: String -> FilePath -> IO ()
 addTreeToDb dbpath treepath = let checks = do (now, path, stats) <- regularStats (lstree treepath)
                                               checkFile now path stats in
