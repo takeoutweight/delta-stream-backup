@@ -14,12 +14,13 @@
 module Backup where
 
 import qualified Control.Exception as CE
-import qualified Control.Monad.Catch as Catch
 import qualified Control.Foldl as F
 import Control.Monad
+import qualified Control.Monad.Catch as Catch
 import qualified Control.Monad.Managed as MM
 import qualified Crypto.Hash as CH
 import qualified Crypto.Hash.Algorithms as CHA
+import qualified DBHelpers as DB
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.DList as DL
@@ -33,21 +34,20 @@ import qualified Data.Time.Clock as DTC
 import qualified Data.Time.Clock.POSIX as POSIX
 import Data.Typeable (Typeable)
 import Database.Beam
-import Database.Beam.Sqlite
 import Database.Beam.Backend.SQL.SQL92
+import Database.Beam.Sqlite
 import qualified Database.Beam.Sqlite.Syntax as BSS
 import qualified Database.SQLite.Simple as SQ
-import qualified Database.SQLite.Simple.ToField as SQTF
 import qualified Database.SQLite.Simple.FromRow as SQS
-import qualified DBHelpers as DB
+import qualified Database.SQLite.Simple.ToField as SQTF
 import qualified Filesystem.Path.CurrentOS as FP
-import qualified System.IO.Error as Error
 import Prelude hiding (FilePath, head)
+import qualified System.IO.Error as Error
 import Turtle hiding (select)
 import qualified Turtle.Bytes as TB
-
   -- Catch.catch :: (CE.Exception e) => Shell a -> (e -> Shell a) -> Shell a
   -- working off https://hackage.haskell.org/package/turtle-1.4.5/docs/src/Turtle-Prelude.html#nl
+
 -- instance Catch.MonadThrow Shell where
 --   throwM = \e -> liftIO (CE.throwIO e)
 -- instance Catch.MonadCatch Shell where
@@ -58,12 +58,10 @@ import qualified Turtle.Bytes as TB
 --           step' st item = step st item -- confusing thing, we get to "pick" what the "items" are for the "passed in" fold? TODO This isn't right yet.
 --           begin' = begin
 --           done' state = done state
-
 -- using (managed_ (bracket_ init finally))  -- i.e. you give a function taking an action.
--- withSavepoint :: MonadManged managed => managed () 
+-- withSavepoint :: MonadManged managed => managed ()
 -- withSavepoint = CE.bracket_
 -- problem is, we'd like our action to accept Shell (not just IO) but is that ok?
-
 connection :: MM.MonadManaged managed => String -> managed SQ.Connection
 connection filename = using (managed (SQ.withConnection filename))
 
@@ -85,8 +83,9 @@ inSizeAndSha :: MonadIO io => FilePath -> io (Int, (CH.Digest CHA.SHA1))
 inSizeAndSha fp =
   fold
     (TB.input fp)
-    ((,) <$> F.premap BS.length F.sum
-         <*> (F.Fold CH.hashUpdate (CH.hashInit :: CH.Context CHA.SHA1) CH.hashFinalize))
+    ((,) <$> F.premap BS.length F.sum <*>
+     (F.Fold CH.hashUpdate (CH.hashInit :: CH.Context CHA.SHA1) CH.hashFinalize))
+
 -- eg
 -- view $ (filterRegularFiles (lstree "src")) >>= shasum
 filterRegularFiles :: Shell FilePath -> Shell FilePath
@@ -139,7 +138,9 @@ outputWithChecksum fp bs =
        (\h -> foldIO bs ((appendFold h) *> F.generalize shasum)))
 
 type Checksum = T.Text
+
 type FileSizeBytes = Int
+
 type ModTime = DTC.UTCTime
 
 data FileStatsR = FileStatsR
@@ -158,6 +159,7 @@ data FileInfoOld
   deriving (Show)
 
 thisMachine = "Nathans-MacBook-Pro-2" :: T.Text
+
 thisArchive = "main-archive" :: T.Text
 
 data FileCheckOld = FileCheckOld
@@ -179,65 +181,82 @@ emitValue :: SQ.SQLData -> BSS.SqliteSyntax
 emitValue v = SqliteSyntax (BSB.byteString "?") (DL.singleton v)
 
 instance HasSqlValueSyntax SqliteValueSyntax UTCTime where
-  sqlValueSyntax tm = SqliteValueSyntax (emitValue (SQ.SQLText (fromString tmStr)))
-    where tmStr = DT.formatTime DT.defaultTimeLocale (DT.iso8601DateFormat (Just "%H:%M:%S%Q")) tm
+  sqlValueSyntax tm =
+    SqliteValueSyntax (emitValue (SQ.SQLText (fromString tmStr)))
+    where
+      tmStr =
+        DT.formatTime
+          DT.defaultTimeLocale
+          (DT.iso8601DateFormat (Just "%H:%M:%S%Q"))
+          tm
 
-data ShaCheckT f
-  = ShaCheck
+data ShaCheckT f = ShaCheck
   { _sha_check_id :: Columnar f (Auto Int)
   , _sha_check_time :: Columnar f UTCTime
-  , _file_machine   :: Columnar f Text
-  , _mod_time  :: Columnar f UTCTime
+  , _file_machine :: Columnar f Text
+  , _mod_time :: Columnar f UTCTime
   , _file_size :: Columnar f Int
-  , _actual_checksum  :: Columnar f Text -- i.e. on-disk checksum, not necessarily the plaintext checksum.
+  , _actual_checksum :: Columnar f Text -- i.e. on-disk checksum, not necessarily the plaintext checksum.
   , _sc_file_info_id :: PrimaryKey FileInfoT f -- Columnar f FileInfoId
   } deriving (Generic)
 
 type ShaCheck = ShaCheckT Identity
+
 type ShaCheckId = PrimaryKey ShaCheckT Identity
 
 deriving instance Show ShaCheck
+
 deriving instance Eq ShaCheck
+
 -- deriving instance Show (ShaCheckT (Nullable Identity)) -- This always required for a nullable mixin?
 -- deriving instance Eq (ShaCheckT (Nullable Identity))
 -- deriving instance Show (PrimaryKey ShaCheckT (Nullable Identity))
 -- deriving instance Eq (PrimaryKey ShaCheckT (Nullable Identity))
 instance Beamable ShaCheckT
+
 instance Table ShaCheckT where
-  data PrimaryKey ShaCheckT f = ShaCheckId (Columnar f (Auto Int)) deriving Generic
+  data PrimaryKey ShaCheckT f = ShaCheckId (Columnar f (Auto Int))
+                            deriving Generic
   primaryKey = ShaCheckId . _sha_check_id
+
 instance Beamable (PrimaryKey ShaCheckT)
 
 -- | The Beam version
-data FileInfoT f
-    = FileInfo
-    { _file_info_id   :: Columnar f Text
-    , _seen_change    :: Columnar f UTCTime -- Last time we've seen the contents change, to warrant a sync.
-    , _exited         :: Columnar f (Maybe UTCTime)
-    , _archive        :: Columnar f Text -- TODO Ref to an "archive" table - each machine can locate each archive on different mountpoints, which is not important, but the path relative to the archive root IS semantic and reflected on all remotes.
-    , _file_path      :: Columnar f Text -- relative to archive root, including filename, so we can determine "the same file" in different remotes.
-    , _file_name      :: Columnar f Text -- Just for convenience, for use w/ `locate` or dedup etc.
-    }
-    deriving (Generic)
+data FileInfoT f = FileInfo
+  { _file_info_id :: Columnar f Text
+  , _seen_change :: Columnar f UTCTime -- Last time we've seen the contents change, to warrant a sync.
+  , _exited :: Columnar f (Maybe UTCTime)
+  , _archive :: Columnar f Text -- TODO Ref to an "archive" table - each machine can locate each archive on different mountpoints, which is not important, but the path relative to the archive root IS semantic and reflected on all remotes.
+  , _file_path :: Columnar f Text -- relative to archive root, including filename, so we can determine "the same file" in different remotes.
+  , _file_name :: Columnar f Text -- Just for convenience, for use w/ `locate` or dedup etc.
+  } deriving (Generic)
 
 type FileInfo = FileInfoT Identity
+
 type FileInfoId = PrimaryKey FileInfoT Identity
 
 deriving instance Show FileInfo
-deriving instance Show FileInfoId
-deriving instance Eq FileInfo
-deriving instance Eq FileInfoId
-instance Beamable FileInfoT
-instance Beamable (PrimaryKey FileInfoT)
-instance Table FileInfoT where
-  data PrimaryKey FileInfoT f = FileInfoId (Columnar f Text) deriving Generic
-  primaryKey = FileInfoId . _file_info_id
 
+deriving instance Show FileInfoId
+
+deriving instance Eq FileInfo
+
+deriving instance Eq FileInfoId
+
+instance Beamable FileInfoT
+
+instance Beamable (PrimaryKey FileInfoT)
+
+instance Table FileInfoT where
+  data PrimaryKey FileInfoT f = FileInfoId (Columnar f Text)
+                            deriving Generic
+  primaryKey = FileInfoId . _file_info_id
 
 data FileDB f = FileDB
   { _fileInfoT :: f (TableEntity FileInfoT)
   , _shaCheckT :: f (TableEntity ShaCheckT)
   } deriving (Generic)
+
 instance Database FileDB
 
 fileDB :: DatabaseSettings be FileDB
@@ -283,7 +302,7 @@ instance SQS.FromRow FileCheckOld where
             ("Stats", Just modtime, Just filesize, Just checksum, Nothing) ->
               (FileStats
                  (FileStatsR
-                   { _modtime = modtime
+                  { _modtime = modtime
                   , _filesize = filesize
                   , _checksum = checksum
                   }))
@@ -298,13 +317,13 @@ instance SQS.FromRow FileCheckOld where
 
 instance SQ.ToRow FileCheckOld where
   toRow (FileCheckOld { _checktime
-                   , _filepath
-                   , _fileroot
-                   , _fileoffset
-                   , _filename
-                   , _filemachine
-                   , _fileinfo
-                   }) =
+                      , _filepath
+                      , _fileroot
+                      , _fileoffset
+                      , _filename
+                      , _filemachine
+                      , _fileinfo
+                      }) =
     (case ( (toText _filepath)
           , (toText _fileroot)
           , (toText _fileoffset)
@@ -354,36 +373,55 @@ instance SQ.ToRow FileCheckOld where
 
 -- | Fold that writes hashes into a HashMap
 fileHashes :: MonadIO io => FoldM io FilePath (HashMap String [FilePath])
-fileHashes = F.FoldM step (return HashMap.empty) return where
-  step hmap fp = do hash <- inshasum fp
-                    return (HashMap.insertWith (++) (show hash) [fp] hmap)
+fileHashes = F.FoldM step (return HashMap.empty) return
+  where
+    step hmap fp = do
+      hash <- inshasum fp
+      return (HashMap.insertWith (++) (show hash) [fp] hmap)
 
 -- | Just use filename for comparison, not checksums
 cheapHashes :: Fold FilePath (HashMap String [FilePath])
-cheapHashes = F.Fold step HashMap.empty id where
-  step hmap fp = (HashMap.insertWith (++) (show (filename fp)) [fp] hmap)
+cheapHashes = F.Fold step HashMap.empty id
+  where
+    step hmap fp = (HashMap.insertWith (++) (show (filename fp)) [fp] hmap)
 
 -- | Returns (leftButNotRight, rightButNotLeft)
-deepDiff :: MonadIO io => FilePath -> FilePath -> io ([FilePath],[FilePath])
-deepDiff leftPath rightPath = do leftMap <- foldIO (filterRegularFiles (lstree leftPath)) fileHashes
-                                 rightMap <- foldIO (filterRegularFiles (lstree rightPath)) fileHashes
-                                 return (concat (HashMap.elems (HashMap.difference leftMap rightMap)),
-                                         concat (HashMap.elems (HashMap.difference rightMap leftMap)))
+deepDiff :: MonadIO io => FilePath -> FilePath -> io ([FilePath], [FilePath])
+deepDiff leftPath rightPath = do
+  leftMap <- foldIO (filterRegularFiles (lstree leftPath)) fileHashes
+  rightMap <- foldIO (filterRegularFiles (lstree rightPath)) fileHashes
+  return
+    ( concat (HashMap.elems (HashMap.difference leftMap rightMap))
+    , concat (HashMap.elems (HashMap.difference rightMap leftMap)))
 
 -- | Returns (leftButNotRight, rightButNotLeft)
-cheapDiff :: MonadIO io => FilePath -> FilePath -> io ([FilePath],[FilePath])
-cheapDiff leftPath rightPath = do leftMap <- fold (filterRegularFiles (lstree leftPath)) cheapHashes
-                                  rightMap <- fold (filterRegularFiles (lstree rightPath)) cheapHashes
-                                  return (concat (HashMap.elems (HashMap.difference leftMap rightMap)),
-                                          concat (HashMap.elems (HashMap.difference rightMap leftMap)))
+cheapDiff :: MonadIO io => FilePath -> FilePath -> io ([FilePath], [FilePath])
+cheapDiff leftPath rightPath = do
+  leftMap <- fold (filterRegularFiles (lstree leftPath)) cheapHashes
+  rightMap <- fold (filterRegularFiles (lstree rightPath)) cheapHashes
+  return
+    ( concat (HashMap.elems (HashMap.difference leftMap rightMap))
+    , concat (HashMap.elems (HashMap.difference rightMap leftMap)))
 
 -- | returns a FoldM that writes a list of FileEvents to SQLite, opens and closes connection for us.
 writeDB :: MonadIO io => SQ.Connection -> FoldM io FileCheckOld ()
-writeDB conn = F.FoldM step (return ()) (\_ -> return ()) where
-  step _ fe = do liftIO (SQ.execute conn "INSERT INTO main_file_checks (time, path, tag, modtime, filesize, checksum, errmsg) VALUES (?,?,?,?,?,?,?)" fe)
+writeDB conn = F.FoldM step (return ()) (\_ -> return ())
+  where
+    step _ fe = do
+      liftIO
+        (SQ.execute
+           conn
+           "INSERT INTO main_file_checks (time, path, tag, modtime, filesize, checksum, errmsg) VALUES (?,?,?,?,?,?,?)"
+           fe)
 
 -- | Converts a filepath to a FileAdd
-mkShaCheck :: MonadIO io => DTC.UTCTime -> FileInfoId  -> FilePath -> FileStatus -> io ShaCheck
+mkShaCheck ::
+     MonadIO io
+  => DTC.UTCTime
+  -> FileInfoId
+  -> FilePath
+  -> FileStatus
+  -> io ShaCheck
 mkShaCheck now fileInfoId fp stat = do
   let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
   (size, hash) <- inSizeAndSha fp
@@ -402,6 +440,7 @@ data PathToTextException = PathToTextException
   { path :: FilePath
   , errMsg :: !Text
   } deriving (Show, Typeable)
+
 instance CE.Exception PathToTextException
 
 unsafeFPToText path =
@@ -419,10 +458,6 @@ fileInfoId machine path = T.intercalate ":" [machine, unsafeFPToText path]
 ensureTrailingSlash :: FilePath -> FilePath
 ensureTrailingSlash fp = fp FP.</> ""
 
--- Catch.onException -- FIXME no instance Catch.MonadMask Shell, nor Catch.MonadCatch Shell
-hypotheticalOnException :: Shell a -> Shell b -> Shell a
-hypotheticalOnException a b = a
-
 -- | Given an absolute path, check it - creating the required logical entry if needed.
 checkFile2 :: SQ.Connection -> Text -> FilePath -> FilePath -> Shell ()
 checkFile2 conn archive root absPath =
@@ -438,57 +473,52 @@ checkFile2 conn archive root absPath =
             , FP.toText (filename absPath)) of
          (Right relText, Right pathText, Right nameText) ->
            let fileInfoID = (T.intercalate ":" [archive, relText])
-                  -- TODO bracket this (maybe with safe-exceptions?)
-           in (do (hypotheticalOnException
-                     (do (liftIO
-                            (SQ.execute_ conn "SAVEPOINT Backup-checkFile2"))
-                         fileStatus :: Either () FileStatus <-
-                           liftIO
-                             (Catch.tryJust
-                                (guard . Error.isDoesNotExistError)
-                                (stat absPath))
-                         result :: Maybe (Maybe FileInfo) <-
-                           (DB.selectOne
-                              conn
-                              (do fileInfo <- all_ (_fileInfoT fileDB)
-                                  guard_
-                                    ((_file_info_id fileInfo) ==.
-                                     val_ fileInfoID)
-                                  pure fileInfo))
-                         (case (result, fileStatus) of
-                            (Nothing, _) ->
-                              err
-                                (repr ("Many existed!? Error!" ++ show absPath))
-                            (Just Nothing, Left _) -> return () -- didn't find the file but didn't have a record of it either.
-                            (Just Nothing, Right status) -> do
-                              echo "None existed yet, Nice."
-                              now <- date
-                              liftIO
-                                (withDatabaseDebug
-                                   putStrLn
-                                   conn
-                                   (runInsert
-                                      (insert
-                                         (_fileInfoT fileDB)
-                                         (insertValues
-                                            [ FileInfo
-                                              { _file_info_id = fileInfoID
-                                              , _seen_change = now
-                                              , _exited = Nothing
-                                              , _archive = archive
-                                              , _file_path = pathText
-                                              , _file_name = nameText
-                                              }
-                                            ]))))
-                            (Just a, maybeStatus) -> echo "Found one")
+           in (liftIO
+                 (Catch.onException
+                    (do (SQ.execute_ conn "SAVEPOINT Backup-checkFile2")
+                        fileStatus :: Either () FileStatus <-
+                          (Catch.tryJust
+                             (guard . Error.isDoesNotExistError)
+                             (stat absPath))
+                        result :: Maybe (Maybe FileInfo) <-
+                          (DB.selectOne
+                             conn
+                             (do fileInfo <- all_ (_fileInfoT fileDB)
+                                 guard_
+                                   ((_file_info_id fileInfo) ==. val_ fileInfoID)
+                                 pure fileInfo))
+                        (case (result, fileStatus) of
+                           (Nothing, _) ->
+                             err
+                               (repr ("Many existed!? Error!" ++ show absPath))
+                           (Just Nothing, Left _) -> return () -- didn't find the file but didn't have a record of it either.
+                           (Just Nothing, Right status) -> do
+                             echo "None existed yet, Nice."
+                             now <- date
+                             (withDatabaseDebug
+                                putStrLn
+                                conn
+                                (runInsert
+                                   (insert
+                                      (_fileInfoT fileDB)
+                                      (insertValues
+                                         [ FileInfo
+                                           { _file_info_id = fileInfoID
+                                           , _seen_change = now
+                                           , _exited = Nothing
+                                           , _archive = archive
+                                           , _file_path = pathText
+                                           , _file_name = nameText
+                                           }
+                                         ]))))
+                           (Just a, maybeStatus) -> echo "Found one")
                                  -- TODO : sha-check it, and link it to this existing fileInfo,
                                  -- possibly update the seen_change time (if it's new, or if it has changed)
                                  -- possibly mark it "exited" if it's gone
-                         (liftIO (SQ.execute_ conn "RELEASE Backup-checkFile2"))
-                         return ())
-                     (liftIO
-                        (do (SQ.execute_ conn "ROLLBACK TO Backup-checkFile2")
-                            (SQ.execute_ conn "RELEASE Backup-checkFile2")))))
+                        (SQ.execute_ conn "RELEASE Backup-checkFile2")
+                        return ())
+                    (do (SQ.execute_ conn "ROLLBACK TO Backup-checkFile2")
+                        (SQ.execute_ conn "RELEASE Backup-checkFile2"))))
          a ->
            err
              (repr
@@ -497,7 +527,6 @@ checkFile2 conn archive root absPath =
 
 -- mkFileInfo :: MonadIO io => (Maybe ShaCheck) -> ShaCheck -> (Maybe FileInfo) -> (Maybe FileInfo)
 -- mkFileInfo = undefined
-
 checkFile :: UTCTime -> FilePath -> FileStatus -> Shell FileCheckOld
 checkFile = undefined
 
@@ -507,9 +536,11 @@ checkFile = undefined
      checktime is too long ago to trust etc)
 -}
 addTreeToDb :: String -> FilePath -> IO ()
-addTreeToDb dbpath treepath = let checks = do (now, path, stats) <- regularStats (lstree treepath)
-                                              checkFile now path stats in
-                                SQ.withConnection dbpath (\conn -> foldIO checks (writeDB conn))
+addTreeToDb dbpath treepath =
+  let checks = do
+        (now, path, stats) <- regularStats (lstree treepath)
+        checkFile now path stats
+  in SQ.withConnection dbpath (\conn -> foldIO checks (writeDB conn))
 
 -- | uses the first filename as the filename of the target.
 cpToDir :: MonadIO io => FilePath -> FilePath -> io ()
@@ -522,7 +553,6 @@ createDB filename =
        SQ.execute_
          conn
          "CREATE TABLE IF NOT EXISTS main_file_checks (id INTEGER PRIMARY KEY, time TEXT, path TEXT, tag TEXT, modtime TEXT, filesize INTEGER, checksum TEXT, errmsg TEXT)")
-
 -- CREATE TABLE IF NOT EXISTS file_checks (bcheckid INTEGER PRIMARY KEY, bchecktime TEXT, bfilemachine TEXT)
 -- DROP TABLE file_checks
 -- SQ.query_ conn "SELECT time, path, type, checksum from main_file_events" :: IO [FileEvent]
