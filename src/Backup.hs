@@ -459,7 +459,7 @@ ensureTrailingSlash :: FilePath -> FilePath
 ensureTrailingSlash fp = fp FP.</> ""
 
 -- | Given an absolute path, check it - creating the required logical entry if needed.
-checkFile2 :: SQ.Connection -> Text -> FilePath -> FilePath -> Shell ()
+checkFile2 :: SQ.Connection -> Text -> FilePath -> FilePath -> IO ()
 checkFile2 conn archive root absPath =
   case stripPrefix (ensureTrailingSlash root) absPath of
     Nothing ->
@@ -473,52 +473,59 @@ checkFile2 conn archive root absPath =
             , FP.toText (filename absPath)) of
          (Right relText, Right pathText, Right nameText) ->
            let fileInfoID = (T.intercalate ":" [archive, relText])
-           in (liftIO
-                 (Catch.onException
-                    (do (SQ.execute_ conn "SAVEPOINT Backup-checkFile2")
-                        fileStatus :: Either () FileStatus <-
-                          (Catch.tryJust
-                             (guard . Error.isDoesNotExistError)
-                             (stat absPath))
-                        result :: Maybe (Maybe FileInfo) <-
-                          (DB.selectOne
+           in (Catch.onException
+                 (do (SQ.execute_ conn "SAVEPOINT Backup-checkFile2")
+                     statTime <- date
+                     fileStatus :: Either () FileStatus <-
+                       (Catch.tryJust
+                          (guard . Error.isDoesNotExistError)
+                          (stat absPath))
+                     result :: Maybe (Maybe FileInfo) <-
+                       (DB.selectOne
+                          conn
+                          (do fileInfo <- all_ (_fileInfoT fileDB)
+                              guard_
+                                ((_file_info_id fileInfo) ==. val_ fileInfoID)
+                              pure fileInfo))
+                     (case (result, fileStatus) of
+                        (Nothing, _) ->
+                          err (repr ("Many existed!? Error!" ++ show absPath))
+                        (Just Nothing, Left _) -> return () -- didn't find the file but didn't have a record of it either.
+                        (Just Nothing, Right status) -> do
+                          echo "None existed yet, Nice."
+                          (withDatabaseDebug
+                             putStrLn
                              conn
-                             (do fileInfo <- all_ (_fileInfoT fileDB)
-                                 guard_
-                                   ((_file_info_id fileInfo) ==. val_ fileInfoID)
-                                 pure fileInfo))
-                        (case (result, fileStatus) of
-                           (Nothing, _) ->
-                             err
-                               (repr ("Many existed!? Error!" ++ show absPath))
-                           (Just Nothing, Left _) -> return () -- didn't find the file but didn't have a record of it either.
-                           (Just Nothing, Right status) -> do
-                             echo "None existed yet, Nice."
-                             now <- date
-                             (withDatabaseDebug
-                                putStrLn
-                                conn
-                                (runInsert
-                                   (insert
-                                      (_fileInfoT fileDB)
-                                      (insertValues
-                                         [ FileInfo
-                                           { _file_info_id = fileInfoID
-                                           , _seen_change = now
-                                           , _exited = Nothing
-                                           , _archive = archive
-                                           , _file_path = pathText
-                                           , _file_name = nameText
-                                           }
-                                         ]))))
-                           (Just a, maybeStatus) -> echo "Found one")
+                             (runInsert
+                                (insert
+                                   (_fileInfoT fileDB)
+                                   (insertValues
+                                      [ FileInfo
+                                        { _file_info_id = fileInfoID
+                                        , _seen_change = statTime
+                                        , _exited = Nothing
+                                        , _archive = archive
+                                        , _file_path = pathText
+                                        , _file_name = nameText
+                                        }
+                                      ]))))
+                        (Just (Just res), Left _) -> do
+                          echo "gone"
+                          (withDatabaseDebug
+                             putStrLn
+                             conn
+                             (runUpdate
+                                (save
+                                   (_fileInfoT fileDB)
+                                   (res {_exited = Just statTime})) -- TODO only on the master remote.
+                              ))
+                        (Just a, Right status) -> echo "Found one")
                                  -- TODO : sha-check it, and link it to this existing fileInfo,
                                  -- possibly update the seen_change time (if it's new, or if it has changed)
-                                 -- possibly mark it "exited" if it's gone
-                        (SQ.execute_ conn "RELEASE Backup-checkFile2")
-                        return ())
-                    (do (SQ.execute_ conn "ROLLBACK TO Backup-checkFile2")
-                        (SQ.execute_ conn "RELEASE Backup-checkFile2"))))
+                     (SQ.execute_ conn "RELEASE Backup-checkFile2")
+                     return ())
+                 (do (SQ.execute_ conn "ROLLBACK TO Backup-checkFile2")
+                     (SQ.execute_ conn "RELEASE Backup-checkFile2")))
          a ->
            err
              (repr
