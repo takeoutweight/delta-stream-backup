@@ -1,11 +1,15 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module DBHelpers where
 
 import qualified Control.Monad.Catch as Catch
 import qualified Control.Monad.IO.Class as CM
+import Data.Typeable (Typeable)
+import GHC.Generics (Generic)
 import qualified Database.Beam as DB
 import qualified Database.Beam.Backend.SQL as DBS
 import qualified Database.Beam.Backend.SQL.SQL92 as SQL92
@@ -19,23 +23,25 @@ import qualified Database.Beam.Sqlite.Types as DBST
 import qualified Database.SQLite.Simple as SQ
 import qualified System.Random as Random
 
--- | Returns Nothing if there are more than one, Just (Nothing) if there are
--- none, or Just (Just x) if there is one.
--- selectOne :: (MonadBeam syntax be handle m, FromBackendRow be a) => syntax -> m (Maybe (Maybe a))
+data SelectOne a = None | One a | Some a a deriving (Show, Eq, Generic, Typeable)
+
+{- | Returns None, One or Some of a collection.
+     selectOne :: (MonadBeam syntax be handle m, FromBackendRow be a) => syntax -> m (Maybe (Maybe a))
+-}
 selectOne' ::
      (DBS.MonadBeam cmd be handle m, DBS.FromBackendRow be a, DBS.IsSql92Syntax cmd)
   => DBQ.SqlSelect (DBS.Sql92SelectSyntax cmd) t
-  -> m (Maybe (Maybe a))
+  -> m (SelectOne a)
 selectOne' (DBQ.SqlSelect s) =
   DBS.runReturningMany (DBS.selectCmd s) $ \next -> do
     a <- next
     case a of
-      Nothing -> pure (Just Nothing)
+      Nothing -> pure None
       Just x -> do
         a' <- next
         case a' of
-          Nothing -> pure (Just (Just x))
-          Just _ -> pure Nothing
+          Nothing -> pure (One x)
+          Just x2 -> pure (Some x x2)
 
 -- | Bundling up a ton of those Beam wrappers into the command. I think I can't
 -- really annotate this w/o the partial type sig, which stands for
@@ -49,7 +55,7 @@ selectOne ::
      )
   => SQ.Connection
   -> DBQI.Q DBSS.SqliteSelectSyntax db _ res
-  -> io (Maybe (Maybe a))
+  -> io (SelectOne a)
 selectOne conn query =
   (CM.liftIO
      (DBS.withDatabaseDebug putStrLn conn (selectOne' (DBQ.select query))))

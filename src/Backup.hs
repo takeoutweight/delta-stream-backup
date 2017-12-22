@@ -442,30 +442,6 @@ writeDB conn = F.FoldM step (return ()) (\_ -> return ())
            "INSERT INTO main_file_checks (time, path, tag, modtime, filesize, checksum, errmsg) VALUES (?,?,?,?,?,?,?)"
            fe)
 
--- | Converts a filepath to a FileAdd
-mkShaCheck ::
-     MonadIO io
-  => DTC.UTCTime
-  -> Text
-  -> FileInfoId
-  -> FilePath
-  -> FileStatus
-  -> io ShaCheck
-mkShaCheck now remote fileInfoId fp stat = do
-  let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
-  (size, hash) <- inSizeAndSha fp
-  return
-    (ShaCheck
-     { _sha_check_id = (Auto Nothing)
-     , _sha_check_time = now
-     , _file_remote = remote
-     , _sha_check_absolute_path = fp
-     , _mod_time = modTime
-     , _file_size = size
-     , _actual_checksum = (T.pack (show hash))
-     , _sc_file_info_id = fileInfoId
-     })
-
 data PathToTextException = PathToTextException
   { path :: FilePath
   , errMsg :: !Text
@@ -489,8 +465,17 @@ ensureTrailingSlash :: FilePath -> FilePath
 ensureTrailingSlash fp = fp FP.</> ""
 
 -- | Given an absolute path, check it - creating the required logical entry if needed.
-checkFile2 :: MonadIO io => SQ.Connection -> Text -> Text -> Bool -> FilePath -> FilePath -> io ()
-checkFile2 conn archive remote masterRemote root absPath =
+checkFile2 ::
+     MonadIO io
+  => SQ.Connection
+  -> Text
+  -> Text
+  -> Bool
+  -> FilePath
+  -> FilePath
+  -> (UTCTime -> Maybe UTCTime -> Bool)
+  -> io ()
+checkFile2 conn archive remote masterRemote root absPath rechecksum =
   case stripPrefix (ensureTrailingSlash root) absPath of
     Nothing ->
       err
@@ -511,7 +496,7 @@ checkFile2 conn archive remote masterRemote root absPath =
                           (Catch.tryJust
                              (guard . Error.isDoesNotExistError)
                              (stat absPath))
-                        result :: Maybe (Maybe FileInfo) <-
+                        result :: DB.SelectOne FileInfo <-
                           (DB.selectOne
                              conn
                              (do fileInfo <- all_ (_fileInfoT fileDB)
@@ -519,11 +504,11 @@ checkFile2 conn archive remote masterRemote root absPath =
                                    ((_file_info_id fileInfo) ==. val_ fileInfoID)
                                  pure fileInfo))
                         (case (result, fileStatus) of
-                           (Nothing, _) ->
+                           (DB.Some _ _, _) ->
                              err
                                (repr ("Many existed!? Error!" ++ show absPath))
-                           (Just Nothing, Left _) -> return () -- didn't find the file but didn't have a record of it either.
-                           (Just Nothing, Right status) -> do
+                           (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
+                           (DB.None, Right status) -> do
                              echo "None existed yet, Nice."
                              (withDatabaseDebug
                                 putStrLn
@@ -542,7 +527,7 @@ checkFile2 conn archive remote masterRemote root absPath =
                                            , _file_name = nameText
                                            }
                                          ]))))
-                           (Just (Just res), Left _) -> do
+                           (DB.One res, Left _) -> do
                              echo "gone"
                              (withDatabaseDebug
                                 putStrLn
@@ -574,7 +559,7 @@ checkFile2 conn archive remote masterRemote root absPath =
                                           , _exited = Just statTime
                                           , _archive_checksum = Nothing
                                           })))))
-                           (Just (Just res), Right stat) -> do
+                           (DB.One res, Right stat) -> do
                              echo "Found one"
                              let modTime =
                                    POSIX.posixSecondsToUTCTime
