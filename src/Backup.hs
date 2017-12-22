@@ -155,7 +155,7 @@ data FileStatsR = FileStatsR
 data FileInfoOld
   = FileStats !FileStatsR
   | FileProblem !T.Text
-  | FileGone
+  | FileGoneOld
   deriving (Show)
 
 thisMachine = "Nathans-MacBook-Pro-2" :: T.Text
@@ -193,7 +193,8 @@ instance HasSqlValueSyntax SqliteValueSyntax UTCTime where
 data ShaCheckT f = ShaCheck
   { _sha_check_id :: Columnar f (Auto Int)
   , _sha_check_time :: Columnar f UTCTime
-  , _file_machine :: Columnar f Text
+  , _file_remote :: Columnar f Text
+  , _sha_check_absolute_path :: Columnar f Text -- This could be redundant, as we should conceivably know the location of the archive on each remote. But maybe we'll support moving these and want a record of the historical location etc?
   , _mod_time :: Columnar f UTCTime
   , _file_size :: Columnar f Int
   , _actual_checksum :: Columnar f Text -- i.e. on-disk checksum, not necessarily the plaintext checksum.
@@ -221,12 +222,38 @@ instance Table ShaCheckT where
 
 instance Beamable (PrimaryKey ShaCheckT)
 
--- | The Beam version
+-- TODO This shares lots of structure w/  ShaCheck, would be nice to factor it.
+data FileGoneCheckT f = FileGoneCheck
+  { _fgc_id :: Columnar f (Auto Int)
+  , _fgc_time :: Columnar f UTCTime
+  , _fgc_remote :: Columnar f Text
+  , _fgc_absolute_path :: Columnar f Text
+  , _fgc_file_info_id :: PrimaryKey FileInfoT f
+  } deriving (Generic)
+
+type FileGoneCheck = FileGoneCheckT Identity
+
+type FileGoneCheckId = PrimaryKey FileGoneCheckT Identity
+
+deriving instance Show FileGoneCheck
+
+deriving instance Eq FileGoneCheck
+
+instance Beamable FileGoneCheckT
+
+instance Table FileGoneCheckT where
+  data PrimaryKey FileGoneCheckT f = FileGoneCheckId (Columnar f (Auto Int))
+                            deriving Generic
+  primaryKey = FileGoneCheckId . _fgc_id
+
+instance Beamable (PrimaryKey FileGoneCheckT)
+
 data FileInfoT f = FileInfo
   { _file_info_id :: Columnar f Text
   , _seen_change :: Columnar f UTCTime -- Last time we've seen the contents change, to warrant a sync.
   , _exited :: Columnar f (Maybe UTCTime)
-  , _archive :: Columnar f Text -- TODO Ref to an "archive" table - each machine can locate each archive on different mountpoints, which is not important, but the path relative to the archive root IS semantic and reflected on all remotes.
+  , _archive_checksum :: Columnar f (Maybe Text) -- always plaintext, the source-of-truth in the archive. None can mean "Don't know, haven't checked yet" or "file doesn't exit"
+  , _archive :: Columnar f Text -- TODO Ref to an "archive" table, but for now an ad-hoc label. This is so a single DB can contain unrelated archives (mounted at different locations, different update policies, etc)  - each machine can locate each archive on different mountpoints, which is not important, but the path relative to the archive root IS semantic and reflected on all remotes.
   , _file_path :: Columnar f Text -- relative to archive root, including filename, so we can determine "the same file" in different remotes.
   , _file_name :: Columnar f Text -- Just for convenience, for use w/ `locate` or dedup etc.
   } deriving (Generic)
@@ -255,6 +282,7 @@ instance Table FileInfoT where
 data FileDB f = FileDB
   { _fileInfoT :: f (TableEntity FileInfoT)
   , _shaCheckT :: f (TableEntity ShaCheckT)
+  , _fileGoneCheckT :: f (TableEntity FileGoneCheckT)
   } deriving (Generic)
 
 instance Database FileDB
@@ -308,7 +336,7 @@ instance SQS.FromRow FileCheckOld where
                   }))
             ("Problem", Nothing, Nothing, Nothing, Just msg) ->
               (FileProblem msg)
-            ("Gone", Nothing, Nothing, Nothing, Nothing) -> FileGone
+            ("Gone", Nothing, Nothing, Nothing, Nothing) -> FileGoneOld
             _ ->
               (FileProblem
                  ("FileEvent row not correctly stored: " <>
@@ -350,7 +378,7 @@ instance SQ.ToRow FileCheckOld where
                   , (Nothing :: Maybe Int)
                   , (Nothing :: Maybe T.Text)
                   , (Just msg))
-                FileGone ->
+                FileGoneOld ->
                   ( ("Gone" :: T.Text)
                   , (Nothing :: Maybe DTC.UTCTime)
                   , (Nothing :: Maybe Int)
@@ -418,18 +446,20 @@ writeDB conn = F.FoldM step (return ()) (\_ -> return ())
 mkShaCheck ::
      MonadIO io
   => DTC.UTCTime
+  -> Text
   -> FileInfoId
   -> FilePath
   -> FileStatus
   -> io ShaCheck
-mkShaCheck now fileInfoId fp stat = do
+mkShaCheck now remote fileInfoId fp stat = do
   let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
   (size, hash) <- inSizeAndSha fp
   return
     (ShaCheck
      { _sha_check_id = (Auto Nothing)
      , _sha_check_time = now
-     , _file_machine = thisMachine
+     , _file_remote = remote
+     , _sha_check_absolute_path = fp
      , _mod_time = modTime
      , _file_size = size
      , _actual_checksum = (T.pack (show hash))
@@ -459,8 +489,8 @@ ensureTrailingSlash :: FilePath -> FilePath
 ensureTrailingSlash fp = fp FP.</> ""
 
 -- | Given an absolute path, check it - creating the required logical entry if needed.
-checkFile2 :: MonadIO io => SQ.Connection -> Text -> FilePath -> FilePath -> io ()
-checkFile2 conn archive root absPath =
+checkFile2 :: MonadIO io => SQ.Connection -> Text -> Text -> Bool -> FilePath -> FilePath -> io ()
+checkFile2 conn archive remote masterRemote root absPath =
   case stripPrefix (ensureTrailingSlash root) absPath of
     Nothing ->
       err
@@ -506,6 +536,7 @@ checkFile2 conn archive root absPath =
                                            { _file_info_id = fileInfoID
                                            , _seen_change = statTime
                                            , _exited = Nothing
+                                           , _archive_checksum = Nothing
                                            , _archive = archive
                                            , _file_path = pathText
                                            , _file_name = nameText
@@ -516,14 +547,74 @@ checkFile2 conn archive root absPath =
                              (withDatabaseDebug
                                 putStrLn
                                 conn
-                                (runUpdate
-                                   (save
-                                      (_fileInfoT fileDB)
-                                      (res {_exited = Just statTime}) -- TODO only on the master remote.
-                                    )))
-                           (Just a, Right status) -> echo "Found one")
-                                 -- TODO : sha-check it, and link it to this existing fileInfo,
-                                 -- possibly update the seen_change time (if it's new, or if it has changed)
+                                (runInsert
+                                   (insert
+                                      (_fileGoneCheckT fileDB)
+                                      (insertValues
+                                         [ FileGoneCheck
+                                           { _fgc_id = Auto Nothing
+                                           , _fgc_time = statTime
+                                           , _fgc_remote = remote
+                                           , _fgc_absolute_path = pathText
+                                           , _fgc_file_info_id =
+                                               FileInfoId fileInfoID
+                                           }
+                                         ]))))
+                             (when
+                                (masterRemote == True &&
+                                 (_exited res) == Nothing)
+                                (withDatabaseDebug
+                                   putStrLn
+                                   conn
+                                   (runUpdate
+                                      (save
+                                         (_fileInfoT fileDB)
+                                         (res
+                                          { _seen_change = statTime
+                                          , _exited = Just statTime
+                                          , _archive_checksum = Nothing
+                                          })))))
+                           (Just (Just res), Right stat) -> do
+                             echo "Found one"
+                             let modTime =
+                                   POSIX.posixSecondsToUTCTime
+                                     (modificationTime stat)
+                             (size, checksum) <- inSizeAndSha absPath
+                             let checksumText = (T.pack (show checksum))
+                             (withDatabaseDebug
+                                putStrLn
+                                conn
+                                (runInsert
+                                   (insert
+                                      (_shaCheckT fileDB)
+                                      (insertValues
+                                         [ ShaCheck
+                                           { _sha_check_id = Auto Nothing
+                                           , _sha_check_time = statTime
+                                           , _file_remote = remote
+                                           , _sha_check_absolute_path = pathText
+                                           , _mod_time = modTime
+                                           , _file_size = size
+                                           , _actual_checksum = checksumText
+                                           , _sc_file_info_id =
+                                               FileInfoId fileInfoID
+                                           }
+                                         ]))))
+                             (when
+                                (masterRemote == True &&
+                                 (_archive_checksum res) /= (Just checksumText))
+                                (withDatabaseDebug
+                                   putStrLn
+                                   conn
+                                   (runUpdate
+                                      (save
+                                         (_fileInfoT fileDB)
+                                         (res
+                                          { _seen_change = statTime
+                                          , _exited = Nothing
+                                          , _archive_checksum =
+                                              Just checksumText
+                                          }))))))
                         (SQ.execute_ conn "RELEASE Backup-checkFile2")
                         return ())
                     (do (SQ.execute_ conn "ROLLBACK TO Backup-checkFile2")
