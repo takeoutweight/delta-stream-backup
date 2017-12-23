@@ -464,6 +464,11 @@ fileInfoId machine path = T.intercalate ":" [machine, unsafeFPToText path]
 ensureTrailingSlash :: FilePath -> FilePath
 ensureTrailingSlash fp = fp FP.</> ""
 
+-- | Never re-check
+defaultRechecksum :: UTCTime -> Maybe UTCTime -> Bool
+defaultRechecksum now Nothing = True
+defaultRechecksum now (Just prev) = False
+
 -- | Given an absolute path, check it - creating the required logical entry if needed.
 checkFile2 ::
      MonadIO io
@@ -471,11 +476,11 @@ checkFile2 ::
   -> Text
   -> Text
   -> Bool
-  -> FilePath
-  -> FilePath
   -> (UTCTime -> Maybe UTCTime -> Bool)
+  -> FilePath
+  -> FilePath
   -> io ()
-checkFile2 conn archive remote masterRemote root absPath rechecksum =
+checkFile2 conn archive remote masterRemote rechecksum root absPath =
   case stripPrefix (ensureTrailingSlash root) absPath of
     Nothing ->
       err
@@ -495,7 +500,7 @@ checkFile2 conn archive remote masterRemote root absPath rechecksum =
                         fileStatus :: Either () FileStatus <-
                           (Catch.tryJust
                              (guard . Error.isDoesNotExistError)
-                             (stat absPath))
+                             (lstat absPath))
                         result :: DB.SelectOne FileInfo <-
                           (DB.selectExactlyOne
                              conn
@@ -508,25 +513,26 @@ checkFile2 conn archive remote masterRemote root absPath rechecksum =
                              err
                                (repr ("Many existed!? Error!" ++ show absPath))
                            (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
-                           (DB.None, Right status) -> do
-                             echo "None existed yet, Nice."
-                             (withDatabaseDebug
-                                putStrLn
-                                conn
-                                (runInsert
-                                   (insert
-                                      (_fileInfoT fileDB)
-                                      (insertValues
-                                         [ FileInfo
-                                           { _file_info_id = fileInfoID
-                                           , _seen_change = statTime
-                                           , _exited = Nothing
-                                           , _archive_checksum = Nothing
-                                           , _archive = archive
-                                           , _file_path = pathText
-                                           , _file_name = nameText
-                                           }
-                                         ]))))
+                           (DB.None, Right stat)
+                             | isRegularFile stat -> do
+                               echo "None existed yet, Nice."
+                               (withDatabaseDebug
+                                  putStrLn
+                                  conn
+                                  (runInsert
+                                     (insert
+                                        (_fileInfoT fileDB)
+                                        (insertValues
+                                           [ FileInfo
+                                             { _file_info_id = fileInfoID
+                                             , _seen_change = statTime
+                                             , _exited = Nothing
+                                             , _archive_checksum = Nothing
+                                             , _archive = archive
+                                             , _file_path = pathText
+                                             , _file_name = nameText
+                                             }
+                                           ]))))
                            (DB.One res, Left _) -> do
                              echo "gone"
                              (withDatabaseDebug
@@ -559,59 +565,73 @@ checkFile2 conn archive remote masterRemote root absPath rechecksum =
                                           , _exited = Just statTime
                                           , _archive_checksum = Nothing
                                           })))))
-                           (DB.One res, Right stat) -> do
-                             echo "Found one"
-                             let modTime =
-                                   POSIX.posixSecondsToUTCTime
-                                     (modificationTime stat)
-                             lastCheck :: Maybe ShaCheck <-
-                               (DB.selectJustOne
-                                  conn
-                                  (limit_
-                                     1
-                                     (orderBy_
-                                        (\s -> (desc_ (_sha_check_time s)))
-                                        (do shaCheck <- all_ (_shaCheckT fileDB)
-                                            guard_
-                                              ((_sc_file_info_id shaCheck) ==.
-                                               val_ (FileInfoId fileInfoID))
-                                            return shaCheck))))
-                             (size, checksum) <- inSizeAndSha absPath
-                             let checksumText = (T.pack (show checksum))
-                             (withDatabaseDebug
-                                putStrLn
-                                conn
-                                (runInsert
-                                   (insert
-                                      (_shaCheckT fileDB)
-                                      (insertValues
-                                         [ ShaCheck
-                                           { _sha_check_id = Auto Nothing
-                                           , _sha_check_time = statTime
-                                           , _file_remote = remote
-                                           , _sha_check_absolute_path = pathText
-                                           , _mod_time = modTime
-                                           , _file_size = size
-                                           , _actual_checksum = checksumText
-                                           , _sc_file_info_id =
-                                               FileInfoId fileInfoID
-                                           }
-                                         ]))))
-                             (when
-                                (masterRemote == True &&
-                                 (_archive_checksum res) /= (Just checksumText))
-                                (withDatabaseDebug
-                                   putStrLn
-                                   conn
-                                   (runUpdate
-                                      (save
-                                         (_fileInfoT fileDB)
-                                         (res
-                                          { _seen_change = statTime
-                                          , _exited = Nothing
-                                          , _archive_checksum =
-                                              Just checksumText
-                                          }))))))
+                           (DB.One res, Right stat)
+                             | isRegularFile stat -> do
+                               echo "Found one"
+                               let modTime =
+                                     POSIX.posixSecondsToUTCTime
+                                       (modificationTime stat)
+                               lastCheck :: Maybe ShaCheck <-
+                                 (DB.selectJustOne
+                                    conn
+                                    (orderBy_
+                                       (\s -> (desc_ (_sha_check_time s)))
+                                       (do shaCheck <- all_ (_shaCheckT fileDB)
+                                           guard_
+                                             ((_sc_file_info_id shaCheck) ==.
+                                              val_ (FileInfoId fileInfoID))
+                                           return shaCheck)))
+                               (when
+                                  (rechecksum
+                                     statTime
+                                     (fmap _sha_check_time lastCheck))
+                                  (do (size, checksum) <- inSizeAndSha absPath
+                                      let checksumText =
+                                            (T.pack (show checksum))
+                                      (withDatabaseDebug
+                                         putStrLn
+                                         conn
+                                         (runInsert
+                                            (insert
+                                               (_shaCheckT fileDB)
+                                               (insertValues
+                                                  [ ShaCheck
+                                                    { _sha_check_id =
+                                                        Auto Nothing
+                                                    , _sha_check_time = statTime
+                                                    , _file_remote = remote
+                                                    , _sha_check_absolute_path =
+                                                        pathText
+                                                    , _mod_time = modTime
+                                                    , _file_size = size
+                                                    , _actual_checksum =
+                                                        checksumText
+                                                    , _sc_file_info_id =
+                                                        FileInfoId fileInfoID
+                                                    }
+                                                  ]))))
+                                      (when
+                                         (masterRemote == True &&
+                                          (_archive_checksum res) /=
+                                          (Just checksumText))
+                                         (withDatabaseDebug
+                                            putStrLn
+                                            conn
+                                            (runUpdate
+                                               (save
+                                                  (_fileInfoT fileDB)
+                                                  (res
+                                                   { _seen_change = statTime
+                                                   , _exited = Nothing
+                                                   , _archive_checksum =
+                                                       Just checksumText
+                                                   })))))))
+                           -- If it's not a regulard file likely.
+                           _ ->
+                             err
+                               (repr
+                                  ("Fallthrough for (is it a regular file?)" ++
+                                   show absPath)))
                         (SQ.execute_ conn "RELEASE Backup-checkFile2")
                         return ())
                     (do (SQ.execute_ conn "ROLLBACK TO Backup-checkFile2")
@@ -638,6 +658,12 @@ addTreeToDb dbpath treepath =
         (now, path, stats) <- regularStats (lstree treepath)
         checkFile now path stats
   in SQ.withConnection dbpath (\conn -> foldIO checks (writeDB conn))
+
+addTreeToDb2 dbpath archive remote masterRemote root absPath =
+  let checks conn = do
+        fp <- (lstree absPath)
+        checkFile2 conn archive remote masterRemote defaultRechecksum root fp
+  in SQ.withConnection dbpath (\conn -> (sh (checks conn)))
 
 -- | uses the first filename as the filename of the target.
 cpToDir :: MonadIO io => FilePath -> FilePath -> io ()
