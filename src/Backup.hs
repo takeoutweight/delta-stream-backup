@@ -497,7 +497,7 @@ checkFile2 conn archive remote masterRemote root absPath rechecksum =
                              (guard . Error.isDoesNotExistError)
                              (stat absPath))
                         result :: DB.SelectOne FileInfo <-
-                          (DB.selectOne
+                          (DB.selectExactlyOne
                              conn
                              (do fileInfo <- all_ (_fileInfoT fileDB)
                                  guard_
@@ -564,6 +564,18 @@ checkFile2 conn archive remote masterRemote root absPath rechecksum =
                              let modTime =
                                    POSIX.posixSecondsToUTCTime
                                      (modificationTime stat)
+                             lastCheck :: Maybe ShaCheck <-
+                               (DB.selectJustOne
+                                  conn
+                                  (limit_
+                                     1
+                                     (orderBy_
+                                        (\s -> (desc_ (_sha_check_time s)))
+                                        (do shaCheck <- all_ (_shaCheckT fileDB)
+                                            guard_
+                                              ((_sc_file_info_id shaCheck) ==.
+                                               val_ (FileInfoId fileInfoID))
+                                            return shaCheck))))
                              (size, checksum) <- inSizeAndSha absPath
                              let checksumText = (T.pack (show checksum))
                              (withDatabaseDebug

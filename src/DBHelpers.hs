@@ -47,7 +47,7 @@ selectOne' (DBQ.SqlSelect s) =
 -- really annotate this w/o the partial type sig, which stands for
 -- Database.Beam.Query.QueryInaccessible
 
-selectOne ::
+selectExactlyOne ::
      ( CM.MonadIO io
      , (DBQI.ProjectibleWithPredicate DBQI.ValueContext DBSS.SqliteExpressionSyntax res)
      , (DBQI.ProjectibleWithPredicate DBQI.AnyType DBSS.SqliteExpressionSyntax res)
@@ -56,7 +56,7 @@ selectOne ::
   => SQ.Connection
   -> DBQI.Q DBSS.SqliteSelectSyntax db _ res
   -> io (SelectOne a)
-selectOne conn query =
+selectExactlyOne conn query =
   (CM.liftIO
      (DBS.withDatabaseDebug putStrLn conn (selectOne' (DBQ.select query))))
 
@@ -76,6 +76,19 @@ all_
                           SqliteSelectSyntax))
                     s))
 -}
+
+-- | If there are many, still returns the first one.
+selectJustOne :: ( CM.MonadIO io
+     , (DBQI.ProjectibleWithPredicate DBQI.ValueContext DBSS.SqliteExpressionSyntax res)
+     , (DBQI.ProjectibleWithPredicate DBQI.AnyType DBSS.SqliteExpressionSyntax res)
+     , (DBS.FromBackendRow DBST.Sqlite a)
+     )
+  => SQ.Connection
+  -> DBQI.Q DBSS.SqliteSelectSyntax db _ res
+  -> io (Maybe a)
+selectJustOne conn query =
+  (CM.liftIO
+     (DBS.withDatabaseDebug putStrLn conn (DBQ.runSelectReturningOne (DBQ.select query))))
 
 myAll_
   :: (DB.Database db,
