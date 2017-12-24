@@ -260,7 +260,7 @@ createFileGoneCheckTable =
            , "fgc_time TEXT"
            , "fgc_remote TEXT"
            , "fgc_absolute_path TEXT"
-           , "fgc_file_info_id TEXT"
+           , "fgc_file_info_id__file_info_id TEXT"
            ])))
 
 type FileGoneCheck = FileGoneCheckT Identity
@@ -621,7 +621,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                              (guard . Error.isDoesNotExistError)
                              (lstat absPath))
                         result :: DB.SelectOne FileInfo <-
-                          (getFileInfo2 conn fileInfoID)
+                          (getFileInfo conn fileInfoID)
                         (case (result, fileStatus) of
                            (DB.Some _ _, _) ->
                              err
