@@ -541,6 +541,7 @@ updateFileInfo conn fileInfo =
      conn
      (runUpdate (save (_file_info fileDB) fileInfo)))
 
+-- | Using my custom one (works fine)
 getFileInfo conn fileInfoID =
   (DB.selectExactlyOne
      conn
@@ -548,7 +549,7 @@ getFileInfo conn fileInfoID =
          guard_ ((_file_info_id fileInfo) ==. val_ fileInfoID)
          pure fileInfo))
 
--- | Without using my custom one
+-- | Without using my custom one (not necessary getFileInfo works)
 getFileInfo2 conn fileInfoID = do
   res <-
     (withDatabaseDebug
@@ -564,6 +565,7 @@ getFileInfo2 conn fileInfoID = do
        Just res -> DB.One res
        Nothing -> DB.None)
 
+-- | FIXME THis one doesn't work
 getRecentFileCheck conn fileInfoID =
   (DB.selectJustOne
      conn
