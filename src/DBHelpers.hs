@@ -77,6 +77,7 @@ all_
                     s))
 -}
 
+-- FIXME this doesn't typecheck
 -- | If there are many, still returns the first one.
 selectJustOne :: ( CM.MonadIO io
      , (DBQI.ProjectibleWithPredicate DBQI.ValueContext DBSS.SqliteExpressionSyntax res)
@@ -86,9 +87,10 @@ selectJustOne :: ( CM.MonadIO io
   => SQ.Connection
   -> DBQI.Q DBSS.SqliteSelectSyntax db _ res
   -> io (Maybe a)
-selectJustOne conn query =
-  (CM.liftIO
-     (DBS.withDatabaseDebug putStrLn conn (DBQ.runSelectReturningOne (DBQ.select query))))
+-- selectJustOne conn query =
+--   (CM.liftIO
+--      (DBS.withDatabaseDebug putStrLn conn (DBQ.runSelectReturningOne (DBQ.select query))))
+selectJustOne = undefined
 
 myAll_
   :: (DB.Database db,

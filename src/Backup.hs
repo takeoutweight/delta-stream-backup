@@ -216,7 +216,7 @@ createShaCheckTable =
            , "mod_time TEXT"
            , "file_size INTEGER"
            , "actual_checksum TEXT"
-           , "sc_file_info_id TEXT"
+           , "sc_file_info_id__file_info_id TEXT" -- Not sure how Beam figures this
            ])))
 
 type ShaCheck = ShaCheckT Identity
@@ -285,7 +285,7 @@ data FileInfoT f = FileInfo
   , _seen_change :: Columnar f UTCTime -- Last time we've seen the contents change, to warrant a sync.
   , _exited :: Columnar f (Maybe UTCTime)
   , _archive_checksum :: Columnar f (Maybe Text) -- always plaintext, the source-of-truth in the archive. None can mean "Don't know, haven't checked yet" or "file doesn't exit"
-  , _archive :: Columnar f Text -- TODO Ref to an "archive" table, but for now an ad-hoc label. This is so a single DB can contain unrelated archives (mounted at different locations, different update policies, etc)  - each machine can locate each archive on different mountpoints, which is not important, but the path relative to the archive root IS semantic and reflected on all remotes.
+  , _archive :: Columnar f Text -- TODO Ref to an "archive" table, but for now an ad-hoc label. This is so a single DB can contain unrelated archives (mounted at different locations on different remotes, different update policies, etc)  - each machine can locate each archive on different mountpoints, which is not important, but the path relative to the archive root IS semantic and reflected on all remotes.
   , _file_path :: Columnar f Text -- relative to archive root, including filename, so we can determine "the same file" in different remotes.
   , _file_name :: Columnar f Text -- Just for convenience, for use w/ `locate` or dedup etc.
   } deriving (Generic)
@@ -503,8 +503,8 @@ unsafeFPToText path =
     Right path -> path
 
 -- not safe if machine has colons in it.
-fileInfoId :: Text -> FilePath -> Text
-fileInfoId machine path = T.intercalate ":" [machine, unsafeFPToText path]
+mkFileInfoId :: Text -> FilePath -> Text
+mkFileInfoId machine path = T.intercalate ":" [machine, unsafeFPToText path]
 
 {- | FilePath seems to only treat paths with trailing slashes as "directories" but
      eg `pwd` doesn't give a trailing slash.
@@ -548,6 +548,22 @@ getFileInfo conn fileInfoID =
          guard_ ((_file_info_id fileInfo) ==. val_ fileInfoID)
          pure fileInfo))
 
+-- | Without using my custom one
+getFileInfo2 conn fileInfoID = do
+  res <-
+    (withDatabaseDebug
+       putStrLn
+       conn
+       (runSelectReturningOne
+          (select
+             (do fileInfo <- all_ (_file_info fileDB)
+                 guard_ ((_file_info_id fileInfo) ==. val_ fileInfoID)
+                 pure fileInfo))))
+  return
+    (case res of
+       Just res -> DB.One res
+       Nothing -> DB.None)
+
 getRecentFileCheck conn fileInfoID =
   (DB.selectJustOne
      conn
@@ -557,6 +573,20 @@ getRecentFileCheck conn fileInfoID =
             guard_
               ((_sc_file_info_id shaCheck) ==. val_ (FileInfoId fileInfoID))
             return shaCheck)))
+
+getRecentFileCheck2 conn fileInfoID =
+  (withDatabaseDebug
+     putStrLn
+     conn
+     (runSelectReturningOne
+        (select
+           (orderBy_
+              (\s -> (desc_ (_sha_check_time s)))
+              (do shaCheck <- all_ (_sha_check fileDB)
+                  guard_
+                    ((_sc_file_info_id shaCheck) ==.
+                     val_ (FileInfoId fileInfoID))
+                  return shaCheck)))))
 
 -- | Given an absolute path, check it - creating the required logical entry if needed.
 checkFile2 ::
@@ -591,7 +621,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                              (guard . Error.isDoesNotExistError)
                              (lstat absPath))
                         result :: DB.SelectOne FileInfo <-
-                          (getFileInfo conn fileInfoId)
+                          (getFileInfo2 conn fileInfoID)
                         (case (result, fileStatus) of
                            (DB.Some _ _, _) ->
                              err
@@ -639,7 +669,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                      POSIX.posixSecondsToUTCTime
                                        (modificationTime stat)
                                lastCheck :: Maybe ShaCheck <-
-                                 (getRecentFileCheck conn fileInfoID)
+                                 (getRecentFileCheck2 conn fileInfoID)
                                (when
                                   (rechecksum
                                      statTime
