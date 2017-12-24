@@ -517,6 +517,30 @@ defaultRechecksum :: UTCTime -> Maybe UTCTime -> Bool
 defaultRechecksum now Nothing = True
 defaultRechecksum now (Just prev) = False
 
+insertFileInfo conn fileInfo =
+  (withDatabaseDebug
+     putStrLn
+     conn
+     (runInsert (insert (_file_info fileDB) (insertValues [fileInfo]))))
+
+insertFileGoneCheck conn fileGone =
+  (withDatabaseDebug
+     putStrLn
+     conn
+     (runInsert (insert (_file_gone_check fileDB) (insertValues [fileGone]))))
+
+insertShaCheck conn shaCheck =
+  (withDatabaseDebug
+     putStrLn
+     conn
+     (runInsert (insert (_sha_check fileDB) (insertValues [shaCheck]))))
+
+updateFileInfo conn fileInfo =
+  (withDatabaseDebug
+     putStrLn
+     conn
+     (runUpdate (save (_file_info fileDB) fileInfo)))
+
 -- | Given an absolute path, check it - creating the required logical entry if needed.
 checkFile2 ::
      MonadIO io
@@ -564,55 +588,38 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                            (DB.None, Right stat)
                              | isRegularFile stat -> do
                                echo "None existed yet, Nice."
-                               (withDatabaseDebug
-                                  putStrLn
+                               (insertFileInfo
                                   conn
-                                  (runInsert
-                                     (insert
-                                        (_file_info fileDB)
-                                        (insertValues
-                                           [ FileInfo
-                                             { _file_info_id = fileInfoID
-                                             , _seen_change = statTime
-                                             , _exited = Nothing
-                                             , _archive_checksum = Nothing
-                                             , _archive = archive
-                                             , _file_path = pathText
-                                             , _file_name = nameText
-                                             }
-                                           ]))))
+                                  (FileInfo
+                                   { _file_info_id = fileInfoID
+                                   , _seen_change = statTime
+                                   , _exited = Nothing
+                                   , _archive_checksum = Nothing
+                                   , _archive = archive
+                                   , _file_path = relText
+                                   , _file_name = nameText
+                                   }))
                            (DB.One res, Left _) -> do
                              echo "gone"
-                             (withDatabaseDebug
-                                putStrLn
+                             (insertFileGoneCheck
                                 conn
-                                (runInsert
-                                   (insert
-                                      (_file_gone_check fileDB)
-                                      (insertValues
-                                         [ FileGoneCheck
-                                           { _fgc_id = Auto Nothing
-                                           , _fgc_time = statTime
-                                           , _fgc_remote = remote
-                                           , _fgc_absolute_path = pathText
-                                           , _fgc_file_info_id =
-                                               FileInfoId fileInfoID
-                                           }
-                                         ]))))
+                                (FileGoneCheck
+                                 { _fgc_id = Auto Nothing
+                                 , _fgc_time = statTime
+                                 , _fgc_remote = remote
+                                 , _fgc_absolute_path = pathText
+                                 , _fgc_file_info_id = FileInfoId fileInfoID
+                                 }))
                              (when
                                 (masterRemote == True &&
                                  (_exited res) == Nothing)
-                                (withDatabaseDebug
-                                   putStrLn
+                                (updateFileInfo
                                    conn
-                                   (runUpdate
-                                      (save
-                                         (_file_info fileDB)
-                                         (res
-                                          { _seen_change = statTime
-                                          , _exited = Just statTime
-                                          , _archive_checksum = Nothing
-                                          })))))
+                                   (res
+                                    { _seen_change = statTime
+                                    , _exited = Just statTime
+                                    , _archive_checksum = Nothing
+                                    })))
                            (DB.One res, Right stat)
                              | isRegularFile stat -> do
                                echo "Found one"
@@ -636,44 +643,31 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                   (do (size, checksum) <- inSizeAndSha absPath
                                       let checksumText =
                                             (T.pack (show checksum))
-                                      (withDatabaseDebug
-                                         putStrLn
+                                      (insertShaCheck
                                          conn
-                                         (runInsert
-                                            (insert
-                                               (_sha_check fileDB)
-                                               (insertValues
-                                                  [ ShaCheck
-                                                    { _sha_check_id =
-                                                        Auto Nothing
-                                                    , _sha_check_time = statTime
-                                                    , _file_remote = remote
-                                                    , _sha_check_absolute_path =
-                                                        pathText
-                                                    , _mod_time = modTime
-                                                    , _file_size = size
-                                                    , _actual_checksum =
-                                                        checksumText
-                                                    , _sc_file_info_id =
-                                                        FileInfoId fileInfoID
-                                                    }
-                                                  ]))))
+                                         (ShaCheck
+                                          { _sha_check_id = Auto Nothing
+                                          , _sha_check_time = statTime
+                                          , _file_remote = remote
+                                          , _sha_check_absolute_path = pathText
+                                          , _mod_time = modTime
+                                          , _file_size = size
+                                          , _actual_checksum = checksumText
+                                          , _sc_file_info_id =
+                                              FileInfoId fileInfoID
+                                          }))
                                       (when
                                          (masterRemote == True &&
                                           (_archive_checksum res) /=
                                           (Just checksumText))
-                                         (withDatabaseDebug
-                                            putStrLn
+                                         (updateFileInfo
                                             conn
-                                            (runUpdate
-                                               (save
-                                                  (_file_info fileDB)
-                                                  (res
-                                                   { _seen_change = statTime
-                                                   , _exited = Nothing
-                                                   , _archive_checksum =
-                                                       Just checksumText
-                                                   })))))))
+                                            (res
+                                             { _seen_change = statTime
+                                             , _exited = Nothing
+                                             , _archive_checksum =
+                                                 Just checksumText
+                                             })))))
                            -- If it's not a regulard file likely.
                            _ ->
                              err
