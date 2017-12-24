@@ -26,6 +26,7 @@ import qualified Data.ByteString.Builder as BSB
 import qualified Data.DList as DL
 import qualified Data.HashMap.Strict as HashMap
 import Data.HashMap.Strict (HashMap)
+import qualified Data.String.Combinators as SC
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Time as DT
@@ -201,6 +202,23 @@ data ShaCheckT f = ShaCheck
   , _sc_file_info_id :: PrimaryKey FileInfoT f -- Columnar f FileInfoId
   } deriving (Generic)
 
+createShaCheckTable :: SQ.Query
+createShaCheckTable =
+  "CREATE TABLE IF NOT EXISTS sha_check " <>
+  (SC.parens
+     (mconcat
+        (SC.punctuate
+           ", "
+           [ "sha_check_id INTEGER PRIMARY KEY"
+           , "sha_check_time TEXT"
+           , "file_remote TEXT"
+           , "sha_check_absolute_path TEXT"
+           , "mod_time TEXT"
+           , "file_size INTEGER"
+           , "actual_checksum TEXT"
+           , "sc_file_info_id TEXT"
+           ])))
+
 type ShaCheck = ShaCheckT Identity
 
 type ShaCheckId = PrimaryKey ShaCheckT Identity
@@ -231,6 +249,20 @@ data FileGoneCheckT f = FileGoneCheck
   , _fgc_file_info_id :: PrimaryKey FileInfoT f
   } deriving (Generic)
 
+createFileGoneCheckTable :: SQ.Query
+createFileGoneCheckTable =
+  "CREATE TABLE IF NOT EXISTS file_gone_check " <>
+  (SC.parens
+     (mconcat
+        (SC.punctuate
+           ", "
+           [ "fgc_id INTEGER PRIMARY KEY"
+           , "fgc_time TEXT"
+           , "fgc_remote TEXT"
+           , "fgc_absolute_path TEXT"
+           , "fgc_file_info_id TEXT"
+           ])))
+
 type FileGoneCheck = FileGoneCheckT Identity
 
 type FileGoneCheckId = PrimaryKey FileGoneCheckT Identity
@@ -258,6 +290,22 @@ data FileInfoT f = FileInfo
   , _file_name :: Columnar f Text -- Just for convenience, for use w/ `locate` or dedup etc.
   } deriving (Generic)
 
+createFileInfoTable :: SQ.Query
+createFileInfoTable =
+  "CREATE TABLE IF NOT EXISTS file_info " <>
+  (SC.parens
+     (mconcat
+        (SC.punctuate
+           ", "
+           [ "file_info_id TEXT PRIMARY KEY"
+           , "seen_change TEXT"
+           , "exited TEXT"
+           , "archive_checksum TEXT"
+           , "archive TEXT"
+           , "file_path TEXT"
+           , "file_name TEXT"
+           ])))
+
 type FileInfo = FileInfoT Identity
 
 type FileInfoId = PrimaryKey FileInfoT Identity
@@ -280,9 +328,9 @@ instance Table FileInfoT where
   primaryKey = FileInfoId . _file_info_id
 
 data FileDB f = FileDB
-  { _fileInfoT :: f (TableEntity FileInfoT)
-  , _shaCheckT :: f (TableEntity ShaCheckT)
-  , _fileGoneCheckT :: f (TableEntity FileGoneCheckT)
+  { _file_info :: f (TableEntity FileInfoT)
+  , _sha_check :: f (TableEntity ShaCheckT)
+  , _file_gone_check :: f (TableEntity FileGoneCheckT)
   } deriving (Generic)
 
 instance Database FileDB
@@ -495,7 +543,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
            let fileInfoID = (T.intercalate ":" [archive, relText])
            in (liftIO
                  (Catch.onException
-                    (do (SQ.execute_ conn "SAVEPOINT Backup-checkFile2")
+                    (do (SQ.execute_ conn "SAVEPOINT Backup_checkFile2")
                         statTime <- date
                         fileStatus :: Either () FileStatus <-
                           (Catch.tryJust
@@ -504,7 +552,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                         result :: DB.SelectOne FileInfo <-
                           (DB.selectExactlyOne
                              conn
-                             (do fileInfo <- all_ (_fileInfoT fileDB)
+                             (do fileInfo <- all_ (_file_info fileDB)
                                  guard_
                                    ((_file_info_id fileInfo) ==. val_ fileInfoID)
                                  pure fileInfo))
@@ -521,7 +569,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                   conn
                                   (runInsert
                                      (insert
-                                        (_fileInfoT fileDB)
+                                        (_file_info fileDB)
                                         (insertValues
                                            [ FileInfo
                                              { _file_info_id = fileInfoID
@@ -540,7 +588,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                 conn
                                 (runInsert
                                    (insert
-                                      (_fileGoneCheckT fileDB)
+                                      (_file_gone_check fileDB)
                                       (insertValues
                                          [ FileGoneCheck
                                            { _fgc_id = Auto Nothing
@@ -559,7 +607,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                    conn
                                    (runUpdate
                                       (save
-                                         (_fileInfoT fileDB)
+                                         (_file_info fileDB)
                                          (res
                                           { _seen_change = statTime
                                           , _exited = Just statTime
@@ -576,7 +624,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                     conn
                                     (orderBy_
                                        (\s -> (desc_ (_sha_check_time s)))
-                                       (do shaCheck <- all_ (_shaCheckT fileDB)
+                                       (do shaCheck <- all_ (_sha_check fileDB)
                                            guard_
                                              ((_sc_file_info_id shaCheck) ==.
                                               val_ (FileInfoId fileInfoID))
@@ -593,7 +641,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                          conn
                                          (runInsert
                                             (insert
-                                               (_shaCheckT fileDB)
+                                               (_sha_check fileDB)
                                                (insertValues
                                                   [ ShaCheck
                                                     { _sha_check_id =
@@ -619,7 +667,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                             conn
                                             (runUpdate
                                                (save
-                                                  (_fileInfoT fileDB)
+                                                  (_file_info fileDB)
                                                   (res
                                                    { _seen_change = statTime
                                                    , _exited = Nothing
@@ -632,10 +680,10 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                (repr
                                   ("Fallthrough for (is it a regular file?)" ++
                                    show absPath)))
-                        (SQ.execute_ conn "RELEASE Backup-checkFile2")
+                        (SQ.execute_ conn "RELEASE Backup_checkFile2")
                         return ())
-                    (do (SQ.execute_ conn "ROLLBACK TO Backup-checkFile2")
-                        (SQ.execute_ conn "RELEASE Backup-checkFile2"))))
+                    (do (SQ.execute_ conn "ROLLBACK TO Backup_checkFile2")
+                        (SQ.execute_ conn "RELEASE Backup_checkFile2"))))
          a ->
            err
              (repr
@@ -665,11 +713,13 @@ addTreeToDb2 dbpath archive remote masterRemote root absPath =
         checkFile2 conn archive remote masterRemote defaultRechecksum root fp
   in SQ.withConnection dbpath (\conn -> (sh (checks conn)))
 
+-- addTreeToDb2 defaultDBFile "archie" "Nates-MBP-2014" True "/Users/nathan/" "/Users/nathan/Pictures/2013/2013-05-15/"
+
 -- | uses the first filename as the filename of the target.
 cpToDir :: MonadIO io => FilePath -> FilePath -> io ()
 cpToDir from toDir = cp from (toDir </> (filename from))
 
-createDB filename =
+createDBOld filename =
   SQ.withConnection
     filename
     (\conn ->
@@ -680,4 +730,19 @@ createDB filename =
 -- DROP TABLE file_checks
 -- SQ.query_ conn "SELECT time, path, type, checksum from main_file_events" :: IO [FileEvent]
 -- um :: FileArchive -> FilePath -> (FileArchive, FileEvent)
--- o:set -XOverloadedStrings
+-- :set -XOverloadedStrings
+
+defaultDBFile = "/Users/nathan/src/haskell/backup/resources/archive.sqlite"
+
+createDB filename =
+  SQ.withConnection
+    filename
+    (\conn ->
+       (Catch.onException
+          (do (SQ.execute_ conn "SAVEPOINT createDB")
+              (SQ.execute_ conn createShaCheckTable)
+              (SQ.execute_ conn createFileGoneCheckTable)
+              (SQ.execute_ conn createFileInfoTable)
+              (SQ.execute_ conn "RELEASE createDB"))
+          (do (SQ.execute_ conn "ROLLBACK TO createDB")
+              (SQ.execute_ conn "RELEASE createDB"))))

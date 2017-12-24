@@ -34,6 +34,7 @@ library
                      , transformers
                      , turtle
                      , sqlite-simple
+                     , string-combinators
                      , system-filepath
                      , unordered-containers
   default-language:    Haskell2010
