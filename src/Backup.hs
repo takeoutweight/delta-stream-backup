@@ -541,6 +541,23 @@ updateFileInfo conn fileInfo =
      conn
      (runUpdate (save (_file_info fileDB) fileInfo)))
 
+getFileInfo conn fileInfoID =
+  (DB.selectExactlyOne
+     conn
+     (do fileInfo <- all_ (_file_info fileDB)
+         guard_ ((_file_info_id fileInfo) ==. val_ fileInfoID)
+         pure fileInfo))
+
+getRecentFileCheck conn fileInfoID =
+  (DB.selectJustOne
+     conn
+     (orderBy_
+        (\s -> (desc_ (_sha_check_time s)))
+        (do shaCheck <- all_ (_sha_check fileDB)
+            guard_
+              ((_sc_file_info_id shaCheck) ==. val_ (FileInfoId fileInfoID))
+            return shaCheck)))
+
 -- | Given an absolute path, check it - creating the required logical entry if needed.
 checkFile2 ::
      MonadIO io
@@ -574,12 +591,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                              (guard . Error.isDoesNotExistError)
                              (lstat absPath))
                         result :: DB.SelectOne FileInfo <-
-                          (DB.selectExactlyOne
-                             conn
-                             (do fileInfo <- all_ (_file_info fileDB)
-                                 guard_
-                                   ((_file_info_id fileInfo) ==. val_ fileInfoID)
-                                 pure fileInfo))
+                          (getFileInfo conn fileInfoId)
                         (case (result, fileStatus) of
                            (DB.Some _ _, _) ->
                              err
@@ -627,15 +639,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                      POSIX.posixSecondsToUTCTime
                                        (modificationTime stat)
                                lastCheck :: Maybe ShaCheck <-
-                                 (DB.selectJustOne
-                                    conn
-                                    (orderBy_
-                                       (\s -> (desc_ (_sha_check_time s)))
-                                       (do shaCheck <- all_ (_sha_check fileDB)
-                                           guard_
-                                             ((_sc_file_info_id shaCheck) ==.
-                                              val_ (FileInfoId fileInfoID))
-                                           return shaCheck)))
+                                 (getRecentFileCheck conn fileInfoID)
                                (when
                                   (rechecksum
                                      statTime
