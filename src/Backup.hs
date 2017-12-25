@@ -618,6 +618,44 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                  (Catch.onException
                     (do (SQ.execute_ conn "SAVEPOINT Backup_checkFile2")
                         statTime <- date
+                        let doCheck res stat = do
+                              echo "Found one"
+                              let modTime =
+                                    POSIX.posixSecondsToUTCTime
+                                      (modificationTime stat)
+                              lastCheck :: Maybe ShaCheck <-
+                                (getRecentFileCheck2 conn fileInfoID)
+                              (when
+                                 (rechecksum
+                                    statTime
+                                    (fmap _sha_check_time lastCheck))
+                                 (do (size, checksum) <- inSizeAndSha absPath
+                                     let checksumText = (T.pack (show checksum))
+                                     (insertShaCheck
+                                        conn
+                                        (ShaCheck
+                                         { _sha_check_id = Auto Nothing
+                                         , _sha_check_time = statTime
+                                         , _file_remote = remote
+                                         , _sha_check_absolute_path = pathText
+                                         , _mod_time = modTime
+                                         , _file_size = size
+                                         , _actual_checksum = checksumText
+                                         , _sc_file_info_id =
+                                             FileInfoId fileInfoID
+                                         }))
+                                     (when
+                                        (masterRemote == True &&
+                                         (_archive_checksum res) /=
+                                         (Just checksumText))
+                                        (updateFileInfo
+                                           conn
+                                           (res
+                                            { _seen_change = statTime
+                                            , _exited = Nothing
+                                            , _archive_checksum =
+                                                Just checksumText
+                                            })))))
                         fileStatus :: Either () FileStatus <-
                           (Catch.tryJust
                              (guard . Error.isDoesNotExistError)
@@ -631,18 +669,19 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                            (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
                            (DB.None, Right stat)
                              | isRegularFile stat -> do
-                               echo "None existed yet, Nice."
-                               (insertFileInfo
-                                  conn
-                                  (FileInfo
-                                   { _file_info_id = fileInfoID
-                                   , _seen_change = statTime
-                                   , _exited = Nothing
-                                   , _archive_checksum = Nothing
-                                   , _archive = archive
-                                   , _file_path = relText
-                                   , _file_name = nameText
-                                   }))
+                               let res =
+                                     (FileInfo
+                                      { _file_info_id = fileInfoID
+                                      , _seen_change = statTime
+                                      , _exited = Nothing
+                                      , _archive_checksum = Nothing
+                                      , _archive = archive
+                                      , _file_path = relText
+                                      , _file_name = nameText
+                                      })
+                               echo (repr ("Adding new file " ++ show absPath))
+                               (insertFileInfo conn res)
+                               (doCheck res stat)
                            (DB.One res, Left _) -> do
                              echo "gone"
                              (insertFileGoneCheck
@@ -665,50 +704,11 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                     , _archive_checksum = Nothing
                                     })))
                            (DB.One res, Right stat)
-                             | isRegularFile stat -> do
-                               echo "Found one"
-                               let modTime =
-                                     POSIX.posixSecondsToUTCTime
-                                       (modificationTime stat)
-                               lastCheck :: Maybe ShaCheck <-
-                                 (getRecentFileCheck2 conn fileInfoID)
-                               (when
-                                  (rechecksum
-                                     statTime
-                                     (fmap _sha_check_time lastCheck))
-                                  (do (size, checksum) <- inSizeAndSha absPath
-                                      let checksumText =
-                                            (T.pack (show checksum))
-                                      (insertShaCheck
-                                         conn
-                                         (ShaCheck
-                                          { _sha_check_id = Auto Nothing
-                                          , _sha_check_time = statTime
-                                          , _file_remote = remote
-                                          , _sha_check_absolute_path = pathText
-                                          , _mod_time = modTime
-                                          , _file_size = size
-                                          , _actual_checksum = checksumText
-                                          , _sc_file_info_id =
-                                              FileInfoId fileInfoID
-                                          }))
-                                      (when
-                                         (masterRemote == True &&
-                                          (_archive_checksum res) /=
-                                          (Just checksumText))
-                                         (updateFileInfo
-                                            conn
-                                            (res
-                                             { _seen_change = statTime
-                                             , _exited = Nothing
-                                             , _archive_checksum =
-                                                 Just checksumText
-                                             })))))
-                           -- If it's not a regulard file likely.
+                             | isRegularFile stat -> doCheck res stat
                            _ ->
                              err
                                (repr
-                                  ("Fallthrough for (is it a regular file?)" ++
+                                  ("Can't process file (is it a regular file?)" ++
                                    show absPath)))
                         (SQ.execute_ conn "RELEASE Backup_checkFile2")
                         return ())
