@@ -285,7 +285,9 @@ data FileInfoT f = FileInfo
   , _seen_change :: Columnar f UTCTime -- Last time we've seen the contents change, to warrant a sync.
   , _exited :: Columnar f (Maybe UTCTime)
   , _archive_checksum :: Columnar f (Maybe Text) -- always plaintext, the source-of-truth in the archive. None can mean "Don't know, haven't checked yet" or "file doesn't exit"
+  , _archive_file_size :: Columnar f (Maybe Int)
   , _archive :: Columnar f Text -- TODO Ref to an "archive" table, but for now an ad-hoc label. This is so a single DB can contain unrelated archives (mounted at different locations on different remotes, different update policies, etc)  - each machine can locate each archive on different mountpoints, which is not important, but the path relative to the archive root IS semantic and reflected on all remotes.
+  , _source_remote :: Columnar f Text
   , _file_path :: Columnar f Text -- relative to archive root, including filename, so we can determine "the same file" in different remotes.
   , _file_name :: Columnar f Text -- Just for convenience, for use w/ `locate` or dedup etc.
   } deriving (Generic)
@@ -301,7 +303,9 @@ createFileInfoTable =
            , "seen_change TEXT"
            , "exited TEXT"
            , "archive_checksum TEXT"
+           , "archive_file_size INT"
            , "archive TEXT"
+           , "source_remote TEXT"
            , "file_path TEXT"
            , "file_name TEXT"
            ])))
@@ -590,6 +594,8 @@ getRecentFileCheck2 conn fileInfoID =
                      val_ (FileInfoId fileInfoID))
                   return shaCheck)))))
 
+
+
 -- | Given an absolute path, check it - creating the required logical entry if needed.
 checkFile2 ::
      MonadIO io
@@ -645,7 +651,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                              FileInfoId fileInfoID
                                          }))
                                      (when
-                                        (masterRemote == True &&
+                                        (masterRemote &&
                                          (_archive_checksum res) /=
                                          (Just checksumText))
                                         (updateFileInfo
@@ -655,6 +661,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                             , _exited = Nothing
                                             , _archive_checksum =
                                                 Just checksumText
+                                            , _archive_file_size = Just size
                                             })))))
                         fileStatus :: Either () FileStatus <-
                           (Catch.tryJust
@@ -668,14 +675,16 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                (repr ("Many existed!? Error!" ++ show absPath))
                            (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
                            (DB.None, Right stat)
-                             | isRegularFile stat -> do
+                             | isRegularFile stat && masterRemote -> do
                                let res =
                                      (FileInfo
                                       { _file_info_id = fileInfoID
                                       , _seen_change = statTime
                                       , _exited = Nothing
                                       , _archive_checksum = Nothing
+                                      , _archive_file_size = Nothing
                                       , _archive = archive
+                                      , _source_remote = remote
                                       , _file_path = relText
                                       , _file_name = nameText
                                       })
@@ -702,6 +711,7 @@ checkFile2 conn archive remote masterRemote rechecksum root absPath =
                                     { _seen_change = statTime
                                     , _exited = Just statTime
                                     , _archive_checksum = Nothing
+                                    , _archive_file_size = Nothing
                                     })))
                            (DB.One res, Right stat)
                              | isRegularFile stat -> doCheck res stat
