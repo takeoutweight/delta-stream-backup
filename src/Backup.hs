@@ -594,9 +594,44 @@ getRecentFileCheck2 conn fileInfoID =
                      val_ (FileInfoId fileInfoID))
                   return shaCheck)))))
 
-
-
--- | Given an absolute path, check it - creating the required logical entry if needed.
+{- | Checking should presume there is already a FileInfo. We may have already done
+     a stat to add the FileInfo in the first place. 
+-}
+checkFile3 ::
+     MonadIO io
+  => SQ.Connection
+  -> (UTCTime -> Maybe UTCTime -> Bool)
+  -> FileInfo
+  -> UTCTime
+  -> FileStatus
+  -> Text
+  -> Text
+  -> FilePath
+  -> io (Maybe ShaCheck)
+checkFile3 conn rechecksum fileInfo statTime stat remote pathText absPath = do
+  lastCheck :: Maybe ShaCheck <- liftIO (getRecentFileCheck2 conn (_file_info_id fileInfo))
+  (if (rechecksum statTime (fmap _sha_check_time lastCheck))
+     then (do (size, checksum) <- inSizeAndSha absPath
+              let checksumText = (T.pack (show checksum))
+              let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
+              return
+                (Just
+                   (ShaCheck
+                    { _sha_check_id = Auto Nothing
+                    , _sha_check_time = statTime
+                    , _file_remote = remote
+                    , _sha_check_absolute_path = pathText
+                    , _mod_time = modTime
+                    , _file_size = size
+                    , _actual_checksum = checksumText
+                    , _sc_file_info_id = FileInfoId (_file_info_id fileInfo)
+                    })))
+     else return Nothing)
+        
+      
+{- | Given an absolute path, check it - creating the required logical entry if
+     needed. This is for ingesting new files.
+-}
 checkFile2 ::
      MonadIO io
   => SQ.Connection

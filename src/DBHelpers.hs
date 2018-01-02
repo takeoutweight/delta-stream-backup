@@ -120,3 +120,5 @@ withSavepoint conn action =
 
 -- TODO: make a Database.Beam.Sqlite.Connection.runInsertReturningList using withSavepoint
 -- Or just a non-list-returning one at least to shorten up that super long one I have to write.
+
+-- :set -fno-warn-partial-type-signatures

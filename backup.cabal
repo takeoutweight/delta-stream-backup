@@ -25,7 +25,9 @@ library
                      , cryptonite
                      , dlist
                      , exceptions
+                     , extensible
                      , filepath
+                     , lens
                      , text
                      , foldl
                      , managed
