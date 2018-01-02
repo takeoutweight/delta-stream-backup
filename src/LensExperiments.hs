@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, DataKinds, TypeOperators, FlexibleContexts #-}
+{-# LANGUAGE TemplateHaskell, DataKinds, TypeOperators, FlexibleContexts, FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# OPTIONS_GHC -fno-warn-unticked-promoted-constructors #-}
 
@@ -19,6 +19,25 @@ LTH.makeClassy ''ExtOne
 -- extOne :: HasExtOne c r => Lens' c (ExtOne r)
 -- instance HasExtOne (ExtOne r0) r0 where extOne = id
 -- fooX = foo . go where go f (Foo x y) = (\x' -> Foo x' y) <$> f x
+
+-- There is maybe an argument I could pass to makeClassy to ignore the
+-- polymorphic part?  but I now can't mention a polymorphic variable in extOneB
+-- for "don't care" because it means you have to give a lense to EVERY type (i.e
+-- if it's not introduced in the instance head?) So maybe mentioning it is unavoidable
+class HasExtOneB t where
+  extOneB :: Lens' t (ExtOne ())
+  extOneBName :: Lens' t String
+  extOneBName = extOneB . go where go f (ExtOne x y r) = (\x' -> ExtOne x' y r) <$> f x
+  extOneBAge :: Lens' t Int
+  extOneBAge = extOneB . go where go f (ExtOne x y r) = (\y' -> ExtOne x y' r) <$> f y
+
+-- Doesn't work -- the way this is set up means the lens has to work for any b,
+-- not the b that happens to be in the data. So that's not possible.
+-- instance HasExtOneB (ExtOne b) where extOneB = id
+
+-- I can't make this work for any argument, as that doesn't match the 
+instance HasExtOneB (ExtOne ()) where
+  extOneB = lens (\(ExtOne x y r) -> ExtOne x y ()) (\old (ExtOne x y r) -> ExtOne x y ()) 
 
 -- "pointfree" style?
 class HasRest (g :: * -> *) where
@@ -48,7 +67,13 @@ instance HasRestB (ExtOne r) r where
 -- instance (HasRest g, HasExtOne a r) => HasExtOne (g a) r where
 --   extOne = undefined
 
--- Tweaking the above, but get: Functional dependencies conflict between instance declarations:
+-- Tweaking the above, but get: Functional dependencies conflict between
+-- instance declarations: The relationship between the two arguments doesn't
+-- agree, i.e. the r isn't the argument to g like it is w/ the builtin
+-- HasExtOne. Could I get around this by not having the default instance?  I
+-- guess the instance is too general, it overlaps. BUT if I could have the
+-- polymorphic part taken out of the classy declaration would we be OK?
+
 -- instance (HasRest g, HasExtOne (f r) r) => HasExtOne (g (f r)) r where
 --   extOne = undefined
 
