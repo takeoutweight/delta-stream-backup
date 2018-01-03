@@ -6,10 +6,13 @@
 {-# LANGUAGE OverloadedLabels, TypeOperators, DataKinds, FlexibleContexts #-}
 -- :set -XOverloadedLabels -XTypeOperators -XDataKinds -XFlexibleContexts
 
+module LensExperiments where
+
 import Data.Extensible
 import qualified Control.Lens.TH as LTH
 import Control.Lens hiding ((:>), Fold)
 import Labels hiding (lens)
+import qualified Labels as Labels
 
 mkField "field1 field2"
 
@@ -118,5 +121,5 @@ instance HasRestB (ExtOne r) r where
 -- so maybe would this correspond to (HasRest g, HasExtOne (ExtOne r) r) => HasExtOne (g (ExtOne r)) (ExtOne r)
 -- No, that's not right - that means "the polymorphic "rest" of the ExtOne is, itself, an ExtOne"
 
--- Not really working, getting overlapping instance errors?
+-- Needed to reload Backup.hs to get this to work?
 -- labelthing = (#foo := "hi", #bar := 123)
