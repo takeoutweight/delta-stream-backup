@@ -48,6 +48,9 @@ import Prelude hiding (FilePath, head)
 import qualified System.IO.Error as Error
 import Turtle hiding (select)
 import qualified Turtle.Bytes as TB
+import Control.Lens hiding ((:>), Fold, cons)
+import Labels hiding (lens)
+import qualified Labels as Labels
 
 shasum :: Fold BS.ByteString (CH.Digest CHA.SHA1)
 shasum =
@@ -382,33 +385,34 @@ getRecentFileCheck2 conn fileInfoID =
      a stat to add the FileInfo in the first place. 
 -}
 checkFile3 ::
-     MonadIO io
-  => SQ.Connection
-  -> (UTCTime -> Maybe UTCTime -> Bool)
-  -> FileInfo
-  -> UTCTime
-  -> FileStatus
-  -> Text
-  -> Text
-  -> FilePath
-  -> io (Maybe ShaCheck)
-checkFile3 conn rechecksum fileInfo statTime stat remote pathText absPath = do
-  lastCheck :: Maybe ShaCheck <- liftIO (getRecentFileCheck2 conn (_file_info_id fileInfo))
-  (if (rechecksum statTime (fmap _sha_check_time lastCheck))
-     then (do (size, checksum) <- inSizeAndSha absPath
+     (MonadIO io
+     , Has "conn" SQ.Connection r
+     , Has "rechecksum" (UTCTime -> Maybe UTCTime -> Bool) r
+     , Has "fileInfo" FileInfo r
+     , Has "statTime" UTCTime r
+     , Has "stat" FileStatus r
+     , Has "remote" Text  r
+     , Has "pathText" Text r
+     , Has "absPath" FilePath r
+     ) =>
+     r -> io (Maybe ShaCheck)
+checkFile3 r = do
+  lastCheck :: Maybe ShaCheck <- liftIO (getRecentFileCheck2 (get #conn r) (_file_info_id (get #fileInfo r)))
+  (if ((get #rechecksum r) (get #statTime r) (fmap _sha_check_time lastCheck))
+     then (do (size, checksum) <- inSizeAndSha (get #absPath r)
               let checksumText = (T.pack (show checksum))
-              let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
+              let modTime = POSIX.posixSecondsToUTCTime (modificationTime (get #stat r))
               return
                 (Just
                    (ShaCheck
                     { _sha_check_id = Auto Nothing
-                    , _sha_check_time = statTime
-                    , _file_remote = remote
-                    , _sha_check_absolute_path = pathText
+                    , _sha_check_time = (get #statTime r)
+                    , _file_remote = (get #remote r)
+                    , _sha_check_absolute_path = (get #pathText r)
                     , _mod_time = modTime
                     , _file_size = size
                     , _actual_checksum = checksumText
-                    , _sc_file_info_id = FileInfoId (_file_info_id fileInfo)
+                    , _sc_file_info_id = FileInfoId (_file_info_id (get #fileInfo r))
                     })))
      else return Nothing)
 
