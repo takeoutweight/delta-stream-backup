@@ -27,6 +27,7 @@ library
                      , exceptions
                      , extensible
                      , filepath
+                     , labels
                      , lens
                      , text
                      , foldl

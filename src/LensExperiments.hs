@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell, DataKinds, TypeOperators, FlexibleContexts, FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE KindSignatures #-}
 {-# OPTIONS_GHC -fno-warn-unticked-promoted-constructors #-}
 
 import Data.Extensible
@@ -17,6 +18,8 @@ mkField "field1 field2"
 data ExtOne r = ExtOne {_extOneName :: String, _extOneAge :: Int, _extOneRest :: r} deriving Show
 
 data ExtTwo r = ExtTwo {_extTwoDate :: String, _extOneEyes :: Int, _extTwoRest :: r} deriving Show
+
+data ExtThree r = ExtThree String
 
 LTH.makeClassy ''ExtOne
 
