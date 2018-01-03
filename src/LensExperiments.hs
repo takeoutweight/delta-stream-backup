@@ -6,10 +6,17 @@ import Data.Extensible
 import qualified Control.Lens.TH as LTH
 import Control.Lens hiding ((:>), Fold)
 
-
 mkField "field1 field2"
 
-data ExtOne r = ExtOne {_extOneName :: String, _extOneAge :: Int, _extOneRest :: r}
+-- type Lens s t a b =
+--   forall (f :: * -> *). Functor f => (a -> f b) -> s -> f t
+--   	-- Defined in ‘Control.Lens.Type’
+
+-- lens :: Functor f => (s -> a) -> (s -> b -> t) -> (a -> f b) -> s -> f t
+
+data ExtOne r = ExtOne {_extOneName :: String, _extOneAge :: Int, _extOneRest :: r} deriving Show
+
+data ExtTwo r = ExtTwo {_extTwoDate :: String, _extOneEyes :: Int, _extTwoRest :: r} deriving Show
 
 LTH.makeClassy ''ExtOne
 
@@ -21,9 +28,10 @@ LTH.makeClassy ''ExtOne
 -- fooX = foo . go where go f (Foo x y) = (\x' -> Foo x' y) <$> f x
 
 -- There is maybe an argument I could pass to makeClassy to ignore the
--- polymorphic part?  but I now can't mention a polymorphic variable in extOneB
--- for "don't care" because it means you have to give a lense to EVERY type (i.e
--- if it's not introduced in the instance head?) So maybe mentioning it is unavoidable
+-- polymorphic part?  The trick was to preset a lens to a version with the
+-- "rest" hidden via (), Not sure what that signifies.  Somehow I feel its
+-- wrong, in that we can "set" with an extone and it just ignores it's rest
+-- argument silently?
 class HasExtOneB t where
   extOneB :: Lens' t (ExtOne ())
   extOneBName :: Lens' t String
@@ -31,13 +39,23 @@ class HasExtOneB t where
   extOneBAge :: Lens' t Int
   extOneBAge = extOneB . go where go f (ExtOne x y r) = (\y' -> ExtOne x y' r) <$> f y
 
--- Doesn't work -- the way this is set up means the lens has to work for any b,
--- not the b that happens to be in the data. So that's not possible.
--- instance HasExtOneB (ExtOne b) where extOneB = id
+instance {-# OVERLAPPING #-} HasExtOneB (ExtOne b) where
+  extOneB =
+    lens
+      (\(ExtOne x y r) -> ExtOne x y ())
+      (\(ExtOne x y r) (ExtOne x' y' r') -> ExtOne x' y' r)
 
--- I can't make this work for any argument, as that doesn't match the 
-instance HasExtOneB (ExtOne ()) where
-  extOneB = lens (\(ExtOne x y r) -> ExtOne x y ()) (\old (ExtOne x y r) -> ExtOne x y ()) 
+instance {-# OVERLAPPING #-} (HasRest g, HasExtOneB a) => HasExtOneB (g a) where
+  extOneB = rest . extOneB
+
+-- eg:
+test1 = (ExtTwo "hi" 3 (ExtOne "dog" 5 ())) ^. extOneBName
+-- Outermost wins
+test2 = (ExtOne "hi" 3 (ExtOne "dog" 5 ())) ^. extOneBName
+
+-- Variable ‘r’ occurs more often on LHS than in head (undecidable)
+-- instance (HasRestB (g r) r, HasExtOneB r) => HasExtOneB (g r) where
+--   extOneB = undefined
 
 -- "pointfree" style?
 class HasRest (g :: * -> *) where
@@ -45,6 +63,9 @@ class HasRest (g :: * -> *) where
 
 instance HasRest ExtOne where
   rest f (ExtOne x y r) = (\r' -> ExtOne x y r') <$> f r
+
+instance HasRest ExtTwo where
+  rest f (ExtTwo x y r) = (\r' -> ExtTwo x y r') <$> f r
   
 class HasRestB c r | c -> r where
   restb :: Lens' c r
@@ -73,8 +94,9 @@ instance HasRestB (ExtOne r) r where
 -- HasExtOne. Could I get around this by not having the default instance?  I
 -- guess the instance is too general, it overlaps. BUT if I could have the
 -- polymorphic part taken out of the classy declaration would we be OK?
+-- The OVERLAPPING Doesn't help
 
--- instance (HasRest g, HasExtOne (f r) r) => HasExtOne (g (f r)) r where
+-- instance {-# OVERLAPPING #-} (HasRest g, HasExtOne (f r) r) => HasExtOne (g (f r)) r where
 --   extOne = undefined
 
 -- :t rest . extOne
