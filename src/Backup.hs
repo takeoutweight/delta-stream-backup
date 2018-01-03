@@ -381,41 +381,6 @@ getRecentFileCheck2 conn fileInfoID =
                      val_ (FileInfoId fileInfoID))
                   return shaCheck)))))
 
-{- | Checking should presume there is already a FileInfo. We may have already done
-     a stat to add the FileInfo in the first place. 
--}
-checkFile3 ::
-     (MonadIO io
-     , Has "conn" SQ.Connection r
-     , Has "rechecksum" (UTCTime -> Maybe UTCTime -> Bool) r
-     , Has "fileInfo" FileInfo r
-     , Has "statTime" UTCTime r
-     , Has "stat" FileStatus r
-     , Has "remote" Text  r
-     , Has "pathText" Text r
-     , Has "absPath" FilePath r
-     ) =>
-     r -> io (Maybe ShaCheck)
-checkFile3 r = do
-  lastCheck :: Maybe ShaCheck <- liftIO (getRecentFileCheck2 (get #conn r) (_file_info_id (get #fileInfo r)))
-  (if ((get #rechecksum r) (get #statTime r) (fmap _sha_check_time lastCheck))
-     then (do (size, checksum) <- inSizeAndSha (get #absPath r)
-              let checksumText = (T.pack (show checksum))
-              let modTime = POSIX.posixSecondsToUTCTime (modificationTime (get #stat r))
-              return
-                (Just
-                   (ShaCheck
-                    { _sha_check_id = Auto Nothing
-                    , _sha_check_time = (get #statTime r)
-                    , _file_remote = (get #remote r)
-                    , _sha_check_absolute_path = (get #pathText r)
-                    , _mod_time = modTime
-                    , _file_size = size
-                    , _actual_checksum = checksumText
-                    , _sc_file_info_id = FileInfoId (_file_info_id (get #fileInfo r))
-                    })))
-     else return Nothing)
-
 
 {- | Given an absolute path, check it - creating the required logical entry if
      needed. This is for ingesting new files.
@@ -559,7 +524,15 @@ addTreeToDb2 dbpath archive remote masterRemote root absPath =
         checkFile2 conn archive remote masterRemote defaultRechecksum root fp
   in SQ.withConnection dbpath (\conn -> (sh (checks conn)))
 
--- addTreeToDb2 defaultDBFile "archie" "Nates-MBP-2014" True "/Users/nathan/" "/Users/nathan/Pictures/2013/2013-05-15/"
+addTreeDefaults =
+  ( #dbpath := defaultDBFile
+  , #archive := "archie"
+  , #remote := "Nates-MBP-2014"
+  , #masterRemote := True
+  , #root := "/Users/nathan/"
+  , #absPath := "/Users/nathan/Pictures/2013/2013-05-15/")
+
+-- addTreeToDb2 addTreeDefaults defaultDBFile "archie" "Nates-MBP-2014" True "/Users/nathan/" "/Users/nathan/Pictures/2013/2013-05-15/"
 
 -- | uses the first filename as the filename of the target.
 cpToDir :: MonadIO io => FilePath -> FilePath -> io ()
