@@ -1,20 +1,37 @@
 {-# LANGUAGE TemplateHaskell, DataKinds, TypeOperators, FlexibleContexts, FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# OPTIONS_GHC -fno-warn-unticked-promoted-constructors #-}
 -- for labels
 {-# LANGUAGE OverloadedLabels, TypeOperators, DataKinds, FlexibleContexts #-}
 -- :set -XOverloadedLabels -XTypeOperators -XDataKinds -XFlexibleContexts
+{-# LANGUAGE GADTs #-}
 
 module LensExperiments where
 
-import Data.Extensible
+-- import Data.Extensible
+import Data.Proxy (Proxy(..))
 import qualified Control.Lens.TH as LTH
-import Control.Lens hiding ((:>), Fold)
+import Control.Lens hiding ((:>), Fold, Identity)
+import GHC.Generics
+import qualified GHC.Generics as G
 import Labels hiding (lens)
 import qualified Labels as Labels
+import Data.Singletons
+import Data.Singletons.TH
+import Data.Vinyl
+import qualified Data.Vinyl as V
+import Data.Vinyl.Lens
+import Data.Vinyl.Functor
+import GHC.TypeLits
+import qualified Data.Vinyl.Functor as V
 
-mkField "field1 field2"
+-- Data.Extensible
+-- mkField "field1 field2"
 
 -- type Lens s t a b =
 --   forall (f :: * -> *). Functor f => (a -> f b) -> s -> f t
@@ -22,11 +39,11 @@ mkField "field1 field2"
 
 -- lens :: Functor f => (s -> a) -> (s -> b -> t) -> (a -> f b) -> s -> f t
 
-data ExtOne r = ExtOne {_extOneName :: String, _extOneAge :: Int, _extOneRest :: r} deriving Show
+data ExtOne r = ExtOne {_extOneName :: String, _extOneAge :: Int, _extOneRest :: r} deriving (Show, Generic)
 
-data ExtTwo r = ExtTwo {_extTwoDate :: String, _extOneEyes :: Int, _extTwoRest :: r} deriving Show
+data ExtTwo r = ExtTwo {_extTwoDate :: String, _extOneEyes :: Int, _extTwoRest :: r} deriving (Show, Generic)
 
-data ExtThree r = ExtThree String
+data ExtThree r = ExtThree String r deriving (Show, Generic)
 
 LTH.makeClassy ''ExtOne
 
@@ -123,3 +140,57 @@ instance HasRestB (ExtOne r) r where
 
 -- Needed to reload Backup.hs to get this to work?
 -- labelthing = (#foo := "hi", #bar := 123)
+
+data FieldOne = FieldOne String
+
+data FieldTwo = FieldTwo Int
+
+class Hass t where
+  type Ret t :: *
+  gett :: t -> Ret t
+
+instance {-# OVERLAPPING #-} Hass (FieldOne, r) where
+  type Ret (FieldOne, r) = FieldOne
+  gett = fst
+
+-- conflicting family instance declaration (same as fundep problem)
+-- instance {-# OVERLAPPING #-} Hass b => Hass (a, b) where
+--   type Ret (a, b) = Ret b
+--   gett = gett . snd
+
+-- Maybe related to overlapping type family instances? (don't work w/ associated types though?)
+
+-- Playing with vinyl, copying a lot of `frames` stuff
+
+type Record = Rec V.Identity
+
+-- | A column's type includes a textual name and the data type of each
+-- element.
+newtype (:->) (s::Symbol) a = Col { getCol :: a }
+  deriving (Eq,Ord,Num,Monoid,Real,RealFloat,RealFrac,Fractional,Floating)
+
+-- | Add a column to the head of a row.
+frameCons :: Functor f => f a -> V.Rec f rs -> V.Rec f (s :-> a ': rs)
+frameCons = (V.:&) . fmap Col
+{-# INLINE frameCons #-}
+
+-- | A @cons@ function for building 'Record' values.
+(&:) :: a -> Record rs -> Record (s :-> a ': rs)
+x &: xs = frameCons (Identity x) xs
+infixr 5 &:
+
+pattern Nil :: Rec f '[]
+pattern Nil = V.RNil
+
+data VFields = VName | VAge | VSleeping | VMaster deriving Show
+
+genSingletons [ ''VFields ]
+
+myget p r = (rget p r) & getIdentity & getCol
+
+-- :t 1 &: 2 &: Nil
+-- :t (1 &: 2 &: Nil) :: Record '["dog" :-> Int, "cat" :-> Int]
+-- This gets out the "pair" "dog" :-> Int, then fetches the value -- seems kind of heavy? But you can name them
+-- let (V.Identity (Col r)) = (rget (Proxy :: Proxy ("dog" :-> Int)) ((1 &: 2 &: Nil) :: Record '["dog" :-> Int, "cat" :-> Int]))
+-- let dog = (Proxy :: Proxy ("dog" :-> Int))
+-- myget dog ((1 &: 2 &: Nil) :: Record '["dog" :-> Int, "cat" :-> Int])

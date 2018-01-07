@@ -302,7 +302,7 @@ checkFile3 r = do
               let modTime = POSIX.posixSecondsToUTCTime (modificationTime (get #stat r))
               return
                 (Just
-                   (ShaCheck
+                  (ShaCheck
                     { _sha_check_id = Auto Nothing
                     , _sha_check_time = (get #statTime r)
                     , _file_remote = (get #remote r)

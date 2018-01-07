@@ -52,6 +52,8 @@ import Control.Lens hiding ((:>), Fold, cons)
 import Labels hiding (lens)
 import qualified Labels as Labels
 
+import Fields
+
 shasum :: Fold BS.ByteString (CH.Digest CHA.SHA1)
 shasum =
   (F.Fold
@@ -381,6 +383,10 @@ getRecentFileCheck2 conn fileInfoID =
                      val_ (FileInfoId fileInfoID))
                   return shaCheck)))))
 
+{- | This is attempting the nested approach to extensible record-esque things
+-}
+checkFile3 :: (MonadIO io, HasConnection r) => r -> io (Maybe ShaCheck)
+checkFile3 = undefined
 
 {- | Given an absolute path, check it - creating the required logical entry if
      needed. This is for ingesting new files.
