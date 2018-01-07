@@ -5,6 +5,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ConstraintKinds #-}
 {-# OPTIONS_GHC -fno-warn-unticked-promoted-constructors #-}
 -- for labels
 {-# LANGUAGE OverloadedLabels, TypeOperators, DataKinds, FlexibleContexts #-}
@@ -27,6 +28,7 @@ import Data.Vinyl
 import qualified Data.Vinyl as V
 import Data.Vinyl.Lens
 import Data.Vinyl.Functor
+import Data.Vinyl.TypeLevel as V
 import GHC.TypeLits
 import qualified Data.Vinyl.Functor as V
 
@@ -194,3 +196,28 @@ myget p r = (rget p r) & getIdentity & getCol
 -- let (V.Identity (Col r)) = (rget (Proxy :: Proxy ("dog" :-> Int)) ((1 &: 2 &: Nil) :: Record '["dog" :-> Int, "cat" :-> Int]))
 -- let dog = (Proxy :: Proxy ("dog" :-> Int))
 -- myget dog ((1 &: 2 &: Nil) :: Record '["dog" :-> Int, "cat" :-> Int])
+
+type MHas e rs = RElem e rs (V.RIndex e rs)
+
+-- Lightweight to define but printing is kind of ugly w/ the "unPath" noise
+newtype ConnectionF = ConnectionF String deriving Show
+newtype PathF = PathF String deriving Show
+
+-- Weird ghci has Record as output but not the "MHas" as input. Maybe ghci doesn't collapse constraint synonyms?
+-- mget :: MHas b rs => s b -> Record rs -> b
+mget rs = (rget Proxy rs) & getIdentity
+
+-- Can let the type pick it out. Neat!
+
+-- let (ConnectionF a) = mget example
+
+example =  ((Identity (ConnectionF "ho")) :& (Identity (PathF "hi")) :& V.RNil)
+
+-- eg rget (Proxy :: Proxy PathF) ((Identity (ConnectionF "ho")) :& (Identity (PathF "hi")) :& V.RNil)
+-- type is a bit verbose: :t \a -> (rget (Proxy :: Proxy PathF) a, rget (Proxy :: Proxy ConnectionF) a)
+-- but can smiplify like :
+-- (\a -> (rget (Proxy :: Proxy PathF) a, rget (Proxy :: Proxy ConnectionF) a))
+--   :: (MHas ConnectionF rs,
+--       MHas PathF rs) =>
+--      Rec f rs -> (f PathF, f ConnectionF)
+-- Might be able to pull out the f too If I never need it.
