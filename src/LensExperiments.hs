@@ -249,5 +249,17 @@ type family Has5 (el :: *) (r :: *) :: Constraint where
   Has5 e (Record (rs :: [*])) = (RElem e rs (VT.RIndex e rs))
 
 -- This doesn't work -- can't deduce r ~ Record r0 so don't have the quantification I want.
+-- But not sure I want this anyway?  I want the parameters for row typing anyway.
 -- get5 :: Has5 e r => r -> e
 -- get5 r = (rget Proxy r) & VF.getIdentity
+
+-- This works if you specify the constraints yourself, but it can't figure out the cons case :(
+-- This is probably weird but o/w the raw RElem and RIndex constraints are exposed in lib code types.
+-- Probably my closest attempt
+class (RElem e rs (VT.RIndex e rs)) => Has6 e rs where
+  get6 :: Record rs -> e
+  get6 rs = (rget Proxy rs) & VF.getIdentity
+
+-- undecidable
+-- instance (VT.RIndex r (s : rs) ~ VT.S i, RElem r rs i) => Has e (s : rs) where
+--   get = undefined

@@ -54,6 +54,8 @@ import qualified System.IO.Error as Error
 import Turtle hiding (select)
 import qualified Turtle.Bytes as TB
 import Control.Lens hiding ((:>), Fold, cons)
+import Data.Vinyl.Lens (RElem)
+import Data.Vinyl.TypeLevel (RIndex)
 
 import Fields
 
@@ -388,10 +390,15 @@ getRecentFileCheck2 conn fileInfoID =
 
 {- | This is attempting the nested approach to extensible record-esque things
 -}
-checkFile3 :: (MonadIO io, Has SQ.Connection r) => Record r -> io (Maybe ShaCheck)
+checkFile3 :: (MonadIO io, Has SQ.Connection r) => Record r -> io (Record (Int : r))-- (Maybe ShaCheck)
 checkFile3 r = do
   liftIO (SQ.close (get r))
-  return Nothing
+  return (r & rcons 3)
+
+-- FIXME: Feel like this should work? Maybe `get` only works on concrete Records?
+-- :t (fmap (\r -> ((get r) :: Int)) (checkFile3 undefined))
+-- this is OK (fmap get ([(3 &: Nil)] :: [Record '[Int]])) :: [Int]
+-- but this works: :t (\r -> ((get r) :: Int)) . (\r -> r & rcons (3 :: Int)) So maybe just something with the monad?
 
 {- | Given an absolute path, check it - creating the required logical entry if
      needed. This is for ingesting new files.

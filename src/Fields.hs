@@ -24,10 +24,9 @@ type Record = Rec VF.Identity
 pattern Nil :: Rec f '[]
 pattern Nil = RNil
 
--- This is probably weird but o/w the raw RElem and RIndex constraints are exposed in lib code types.
-class (RElem e rs (VT.RIndex e rs)) => Has e rs where
-  get :: Record rs -> e
-  get rs = (rget Proxy rs) & VF.getIdentity
+type Has e rs = RElem e rs (VT.RIndex e rs)
+
+get rs = (rget Proxy rs) & VF.getIdentity
 
 rcons :: r -> Record rs -> Record (r : rs)
 rcons e rs = (VF.Identity e) :& rs
