@@ -30,13 +30,13 @@ pattern Nil = RNil
 
 type Has e rs = RElem e rs (VT.RIndex e rs)
 
-get rs = (rget Proxy rs) & VF.getIdentity
+fget rs = (rget Proxy rs) & VF.getIdentity
 
-rcons :: r -> Record rs -> Record (r : rs)
-rcons e rs = (VF.Identity e) :& rs
+fcons :: r -> Record rs -> Record (r : rs)
+fcons e rs = (VF.Identity e) :& rs
 
 (&:) :: r -> Record rs -> Record (r : rs)
-e &: rs = rcons e rs
+e &: rs = fcons e rs
 infixr 5 &:
 
 -- our fields

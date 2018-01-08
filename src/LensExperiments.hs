@@ -253,7 +253,7 @@ type family Has5 (el :: *) (r :: *) :: Constraint where
 -- get5 :: Has5 e r => r -> e
 -- get5 r = (rget Proxy r) & VF.getIdentity
 
--- This works if you specify the constraints yourself, but it can't figure out the cons case :(
+-- This works if you specify the constraints explicitly, but it can't figure out the cons case :(
 -- This is probably weird but o/w the raw RElem and RIndex constraints are exposed in lib code types.
 -- Probably my closest attempt
 class (RElem e rs (VT.RIndex e rs)) => Has6 e rs where

@@ -392,13 +392,13 @@ getRecentFileCheck2 conn fileInfoID =
 -}
 checkFile3 :: (MonadIO io, Has SQ.Connection r) => Record r -> io (Record (Int : r))-- (Maybe ShaCheck)
 checkFile3 r = do
-  liftIO (SQ.close (get r))
-  return (r & rcons 3)
+  liftIO (SQ.close (fget r))
+  return (r & fcons 3)
 
 -- FIXME: Feel like this should work? Maybe `get` only works on concrete Records?
 -- :t (fmap (\r -> ((get r) :: Int)) (checkFile3 undefined))
 -- this is OK (fmap get ([(3 &: Nil)] :: [Record '[Int]])) :: [Int]
--- but this works: :t (\r -> ((get r) :: Int)) . (\r -> r & rcons (3 :: Int)) So maybe just something with the monad?
+-- but this works: :t (\r -> ((get r) :: Int)) . (\r -> r & fcons (3 :: Int)) So maybe just something with the monad?
 
 {- | Given an absolute path, check it - creating the required logical entry if
      needed. This is for ingesting new files.
@@ -415,13 +415,13 @@ checkFile2 ::
   => Record r
   -> io ()
 checkFile2 ctx =
-  let conn :: SQ.Connection = (get ctx)
-      Archive archive = (get ctx)
-      Remote remote = (get ctx)
-      MasterRemote masterRemote = (get ctx)
-      Root root = (get ctx)
-      AbsPath absPath = (get ctx)
-      Rechecksum rechecksum = (get ctx) in
+  let conn :: SQ.Connection = (fget ctx)
+      Archive archive = (fget ctx)
+      Remote remote = (fget ctx)
+      MasterRemote masterRemote = (fget ctx)
+      Root root = (fget ctx)
+      AbsPath absPath = (fget ctx)
+      Rechecksum rechecksum = (fget ctx) in
   case stripPrefix (ensureTrailingSlash root) absPath of
     Nothing ->
       err
@@ -544,11 +544,12 @@ checkFile2 ctx =
                 ("Can't textify path: " ++
                  show root ++ ", " ++ show absPath ++ " : " ++ show a)))
 
-addTreeToDb2 ctx =
+-- | Walks dirpath recursively
+addTreeToDb2 ctx dirpath =
   let checks conn = do
-        fp <- (lstree (absPath (get ctx)))
-        checkFile2 (conn &: ctx)
-  in SQ.withConnection (dbpath (get ctx)) (\conn -> (sh (checks conn)))
+        fp <- (lstree dirpath)
+        checkFile2 (AbsPath fp &: conn &: ctx)
+  in SQ.withConnection (dbpath (fget ctx)) (\conn -> (sh (checks conn)))
 
 addTreeDefaults =
   (  DBPath defaultDBFile
@@ -556,12 +557,11 @@ addTreeDefaults =
   &: Remote "Nates-MBP-2014"
   &: MasterRemote True
   &: Root "/Users/nathan/"
-  &: AbsPath "/Users/nathan/Pictures/2013/2013-05-15/"
   &: Rechecksum defaultRechecksum
   &: Nil
   )
 
--- addTreeToDb2 addTreeDefaults
+-- addTreeToDb2 addTreeDefaults "/Users/nathan/Pictures/2013/2013-05-15/"
 
 -- | uses the first filename as the filename of the target.
 cpToDir :: MonadIO io => FilePath -> FilePath -> io ()
