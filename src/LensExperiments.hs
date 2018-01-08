@@ -28,8 +28,11 @@ import Data.Vinyl
 import qualified Data.Vinyl as V
 import Data.Vinyl.Lens
 import Data.Vinyl.Functor
-import Data.Vinyl.TypeLevel as V
+import qualified Data.Vinyl.Functor as VF
+import qualified Data.Vinyl.TypeLevel as VT
+import qualified Database.SQLite.Simple as SQ
 import GHC.TypeLits
+import GHC.Exts (Constraint)
 import qualified Data.Vinyl.Functor as V
 
 -- Data.Extensible
@@ -197,7 +200,7 @@ myget p r = (rget p r) & getIdentity & getCol
 -- let dog = (Proxy :: Proxy ("dog" :-> Int))
 -- myget dog ((1 &: 2 &: Nil) :: Record '["dog" :-> Int, "cat" :-> Int])
 
-type MHas e rs = RElem e rs (V.RIndex e rs)
+type MHas e rs = RElem e rs (VT.RIndex e rs)
 
 -- Lightweight to define but printing is kind of ugly w/ the "unPath" noise
 newtype ConnectionF = ConnectionF String deriving Show
@@ -222,3 +225,29 @@ example =  ((Identity (ConnectionF "ho")) :& (Identity (PathF "hi")) :& V.RNil)
 --       MHas PathF rs) =>
 --      Rec f rs -> (f PathF, f ConnectionF)
 -- Might be able to pull out the f too If I never need it.
+
+
+-- Trying to have constraints on Records instead of the record param [*]
+
+-- This doesn't let you use "r" as a type, you have to use Record r -> - Not sure there'as a way around that?
+-- could do like Has SQ.Connection r0, r ~ Record r0, but not sure if you can stack constraints on the record instead of the record parameter.
+type Ha0s e rs = RElem e rs (VT.RIndex e rs)
+
+-- Doesn't work, guess you can't introduce hidden params w/ a constraint synonym? They must be monotype.
+-- type Has2 e r = forall rs. (RElem e rs (VT.RIndex e rs), r ~ Record rs)
+
+-- This is me trying to allow constraints on a Record, instead of the Record's argument. But it seems undecidable.
+class Has4 e r where
+  type Has4C (e :: *) (rs :: [*]) :: Constraint
+  get4 :: (Has4C e rs, r ~ record rs) => r -> e
+
+-- instance Has4 e (Record rs) where
+--   type Has4C e rs = (RElem e rs (VT.RIndex e rs))
+--   get4 = undefined
+
+type family Has5 (el :: *) (r :: *) :: Constraint where
+  Has5 e (Record (rs :: [*])) = (RElem e rs (VT.RIndex e rs))
+
+-- This doesn't work -- can't deduce r ~ Record r0 so don't have the quantification I want.
+-- get5 :: Has5 e r => r -> e
+-- get5 r = (rget Proxy r) & VF.getIdentity

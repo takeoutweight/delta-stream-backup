@@ -11,6 +11,11 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
+-- {-# LANGUAGE ConstraintKinds #-}
+-- {-# LANGUAGE KindSignatures #-}
+-- {-# LANGUAGE TypeOperators #-}
+-- {-# LANGUAGE DataKinds #-}
+
 -- :set -XOverloadedStrings
 
 module Backup where
@@ -49,8 +54,6 @@ import qualified System.IO.Error as Error
 import Turtle hiding (select)
 import qualified Turtle.Bytes as TB
 import Control.Lens hiding ((:>), Fold, cons)
-import Labels hiding (lens)
-import qualified Labels as Labels
 
 import Fields
 
@@ -385,8 +388,10 @@ getRecentFileCheck2 conn fileInfoID =
 
 {- | This is attempting the nested approach to extensible record-esque things
 -}
-checkFile3 :: (MonadIO io, HasConnection r) => r -> io (Maybe ShaCheck)
-checkFile3 = undefined
+checkFile3 :: (MonadIO io, Has SQ.Connection r) => Record r -> io (Maybe ShaCheck)
+checkFile3 r = do
+  liftIO (SQ.close (get r))
+  return Nothing
 
 {- | Given an absolute path, check it - creating the required logical entry if
      needed. This is for ingesting new files.
@@ -531,12 +536,14 @@ addTreeToDb2 dbpath archive remote masterRemote root absPath =
   in SQ.withConnection dbpath (\conn -> (sh (checks conn)))
 
 addTreeDefaults =
-  ( #dbpath := defaultDBFile
-  , #archive := "archie"
-  , #remote := "Nates-MBP-2014"
-  , #masterRemote := True
-  , #root := "/Users/nathan/"
-  , #absPath := "/Users/nathan/Pictures/2013/2013-05-15/")
+  (  DBPath defaultDBFile
+  &: Archive "archie"
+  &: Remote "Nates-MBP-2014"
+  &: MasterRemote True
+  &: Root "/Users/nathan/"
+  &: AbsPath "/Users/nathan/Pictures/2013/2013-05-15/"
+  &: Nil
+  )
 
 -- addTreeToDb2 addTreeDefaults defaultDBFile "archie" "Nates-MBP-2014" True "/Users/nathan/" "/Users/nathan/Pictures/2013/2013-05-15/"
 
