@@ -14,10 +14,14 @@ module Fields where
 import Control.Lens ((&))
 import Data.Vinyl
 import Data.Proxy (Proxy(..))
+import Data.Text (Text)
+import Data.Time.Clock (UTCTime)
 import qualified Data.Vinyl.Functor as VF
 import qualified Data.Vinyl.TypeLevel as VT
 import qualified Database.SQLite.Simple as SQ
 import GHC.Exts (Constraint)
+import Turtle (FilePath)
+import Prelude hiding (FilePath)
 
 type Record = Rec VF.Identity
 
@@ -37,14 +41,16 @@ infixr 5 &:
 
 -- our fields
   
-newtype DBPath = DBPath String deriving Show
+newtype DBPath = DBPath {dbpath :: String} deriving Show
 
-newtype Archive = Archive String deriving Show
+newtype Archive = Archive Text deriving Show
 
-newtype Remote = Remote String deriving Show
+newtype Remote = Remote Text deriving Show
 
 newtype MasterRemote = MasterRemote Bool deriving Show
 
-newtype Root = Root String deriving Show
+newtype Root = Root FilePath deriving Show
 
-newtype AbsPath = AbsPath String deriving Show
+newtype AbsPath = AbsPath FilePath deriving Show
+
+newtype Rechecksum = Rechecksum (UTCTime -> Maybe UTCTime -> Bool)
