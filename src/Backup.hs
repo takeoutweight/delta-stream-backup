@@ -459,6 +459,53 @@ checkFile3 r = do
 -- this is OK (fmap get ([(3 &: Nil)] :: [Record '[Int]])) :: [Int]
 -- but this works: :t (\r -> ((get r) :: Int)) . (\r -> r & fcons (3 :: Int)) So maybe just something with the monad?
 
+doCheck ::
+     ( Has AbsPath rs
+     , Has StatTime rs
+     , Has Rechecksum rs
+     , Has FileInfoIdText rs
+     , Has SQ.Connection rs
+     , Has Remote rs
+     , Has AbsPathText rs
+     , Has MasterRemote rs
+     )
+  => Record rs
+  -> FileInfoT Identity
+  -> FileStatus
+  -> IO ()
+doCheck ctx res stat = do
+      let conn :: SQ.Connection = (fget ctx)
+      let modTime =
+            POSIX.posixSecondsToUTCTime
+              (modificationTime stat)
+      lastCheck :: Maybe ShaCheck <-
+        (getRecentFileCheck2 conn (nget FileInfoIdText ctx))
+      (when
+         ((nget Rechecksum ctx)
+            (nget StatTime ctx)
+            (fmap _sha_check_time lastCheck))
+         (do (size, checksum) <- inSizeAndSha (nget AbsPath ctx)
+             let checksumText = (T.pack (show checksum))
+             (insertShaCheck
+                conn
+                (mkShaCheck (  ModTime modTime
+                           &: FileSize size
+                           &: Checksum checksumText
+                           &: ctx)))
+             (when
+                ((nget MasterRemote ctx) &&
+                 (_archive_checksum res) /=
+                 (Just checksumText))
+                (updateFileInfo
+                   conn
+                   (res
+                    { _seen_change = (nget StatTime ctx)
+                    , _exited = Nothing
+                    , _archive_checksum =
+                        Just checksumText
+                    , _archive_file_size = Just size
+                    })))))
+
 {- | Given an absolute path, check it - creating the required logical entry if
      needed. This is for ingesting new files.
 -}
@@ -501,38 +548,6 @@ checkFile2 ctx =
                                    &: AbsPathText pathText
                                    &: StatTime statTime
                                    &: ctx)
-                        let doCheck res stat = do
-                              echo "Found one"
-                              let modTime =
-                                    POSIX.posixSecondsToUTCTime
-                                      (modificationTime stat)
-                              lastCheck :: Maybe ShaCheck <-
-                                (getRecentFileCheck2 (conn :: SQ.Connection) fileInfoID)
-                              (when
-                                 (rechecksum
-                                    statTime
-                                    (fmap _sha_check_time lastCheck))
-                                 (do (size, checksum) <- inSizeAndSha absPath
-                                     let checksumText = (T.pack (show checksum))
-                                     (insertShaCheck
-                                        conn
-                                        (mkShaCheck (  ModTime modTime
-                                                   &: FileSize size
-                                                   &: Checksum checksumText
-                                                   &: ctx2)))
-                                     (when
-                                        (masterRemote &&
-                                         (_archive_checksum res) /=
-                                         (Just checksumText))
-                                        (updateFileInfo
-                                           conn
-                                           (res
-                                            { _seen_change = statTime
-                                            , _exited = Nothing
-                                            , _archive_checksum =
-                                                Just checksumText
-                                            , _archive_file_size = Just size
-                                            })))))
                         fileStatus :: Either () FileStatus <-
                           (Catch.tryJust
                              (guard . Error.isDoesNotExistError)
@@ -551,7 +566,7 @@ checkFile2 ctx =
                                                    &: ctx2))
                                echo (repr ("Adding new file " ++ show absPath))
                                (insertFileInfo conn res)
-                               (doCheck res stat)
+                               (doCheck ctx2 res stat)
                            (DB.One res, Left _) -> do
                              echo "gone"
                              (insertFileGoneCheck
@@ -569,7 +584,7 @@ checkFile2 ctx =
                                     , _archive_file_size = Nothing
                                     })))
                            (DB.One res, Right stat)
-                             | isRegularFile stat -> doCheck res stat
+                             | isRegularFile stat -> doCheck ctx2 res stat
                            _ ->
                              err
                                (repr
