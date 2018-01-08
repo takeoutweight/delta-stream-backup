@@ -373,6 +373,19 @@ mkShaCheck ctx =
    , _sc_file_info_id = FileInfoId (nget FileInfoIdText ctx)
    })
 
+mkFileGoneCheck ::
+     (Has StatTime rs, Has Remote rs, Has AbsPathText rs, Has FileInfoIdText rs)
+  => Record rs
+  -> FileGoneCheck
+mkFileGoneCheck ctx =
+  (FileGoneCheck
+   { _fgc_id = Auto Nothing
+   , _fgc_time = nget StatTime ctx
+   , _fgc_remote = nget Remote ctx
+   , _fgc_absolute_path = nget AbsPathText ctx
+   , _fgc_file_info_id = FileInfoId (nget FileInfoIdText ctx)
+   })
+
 insertShaCheck conn shaCheck =
   (withDatabaseDebug
      putStrLn
@@ -532,7 +545,7 @@ checkFile2 ctx =
                            (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
                            (DB.None, Right stat)
                              | isRegularFile stat && masterRemote -> do
-                               let res = (mkFileInfo (FileInfoIdText fileInfoID
+                               let res = (mkFileInfo (  FileInfoIdText fileInfoID
                                                    &: StatTime statTime
                                                    &: RelativePathText relText
                                                    &: Filename nameText
@@ -544,13 +557,10 @@ checkFile2 ctx =
                              echo "gone"
                              (insertFileGoneCheck
                                 conn
-                                (FileGoneCheck
-                                 { _fgc_id = Auto Nothing
-                                 , _fgc_time = statTime
-                                 , _fgc_remote = remote
-                                 , _fgc_absolute_path = pathText
-                                 , _fgc_file_info_id = FileInfoId fileInfoID
-                                 }))
+                                (mkFileGoneCheck (  FileInfoIdText fileInfoID
+                                               &: StatTime statTime
+                                               &: AbsPathText pathText
+                                               &: ctx)))
                              (when
                                 (masterRemote == True &&
                                  (_exited res) == Nothing)
