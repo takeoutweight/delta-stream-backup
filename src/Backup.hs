@@ -544,10 +544,10 @@ checkFile2 ctx =
                 ("Can't textify path: " ++
                  show root ++ ", " ++ show absPath ++ " : " ++ show a)))
 
-addTreeToDb2 ctx masterRemote root absPath =
+addTreeToDb2 ctx =
   let checks conn = do
-        fp <- (lstree absPath)
-        checkFile2 (Rechecksum defaultRechecksum &: AbsPath fp &: Root root &: conn &: ctx)
+        fp <- (lstree (absPath (get ctx)))
+        checkFile2 (conn &: ctx)
   in SQ.withConnection (dbpath (get ctx)) (\conn -> (sh (checks conn)))
 
 addTreeDefaults =
@@ -557,6 +557,7 @@ addTreeDefaults =
   &: MasterRemote True
   &: Root "/Users/nathan/"
   &: AbsPath "/Users/nathan/Pictures/2013/2013-05-15/"
+  &: Rechecksum defaultRechecksum
   &: Nil
   )
 

@@ -51,6 +51,6 @@ newtype MasterRemote = MasterRemote Bool deriving Show
 
 newtype Root = Root FilePath deriving Show
 
-newtype AbsPath = AbsPath FilePath deriving Show
+newtype AbsPath = AbsPath {absPath :: FilePath} deriving Show
 
 newtype Rechecksum = Rechecksum (UTCTime -> Maybe UTCTime -> Bool)
