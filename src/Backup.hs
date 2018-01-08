@@ -327,6 +327,29 @@ insertFileGoneCheck conn fileGone =
      conn
      (runInsert (insert (_file_gone_check fileDB) (insertValues [fileGone]))))
 
+mkFileInfo ::
+     ( Has FileInfoIdText rs
+     , Has StatTime rs
+     , Has Archive rs
+     , Has Remote rs
+     , Has RelativePathText rs
+     , Has Filename rs
+     )
+  => Record rs
+  -> FileInfo
+mkFileInfo ctx =
+  (FileInfo
+   { _file_info_id = nget FileInfoIdText ctx
+   , _seen_change = nget StatTime ctx
+   , _exited = Nothing
+   , _archive_checksum = Nothing
+   , _archive_file_size = Nothing
+   , _archive = nget Archive ctx
+   , _source_remote = nget Remote ctx
+   , _file_path = nget RelativePathText ctx
+   , _file_name = nget Filename ctx
+   })
+
 mkShaCheck ::
      ( Has StatTime rs
      , Has Remote rs
@@ -334,7 +357,7 @@ mkShaCheck ::
      , Has ModTime rs
      , Has FileSize rs
      , Has Checksum rs
-     , Has FileInfoId rs
+     , Has FileInfoIdText rs
      )
   => Record rs
   -> ShaCheck
@@ -347,7 +370,7 @@ mkShaCheck ctx =
    , _mod_time = nget ModTime ctx
    , _file_size = nget FileSize ctx
    , _actual_checksum = nget Checksum ctx
-   , _sc_file_info_id = fget ctx -- FileInfoId fileInfoID
+   , _sc_file_info_id = FileInfoId (nget FileInfoIdText ctx)
    })
 
 insertShaCheck conn shaCheck =
@@ -476,17 +499,13 @@ checkFile2 ctx =
                                      let checksumText = (T.pack (show checksum))
                                      (insertShaCheck
                                         conn
-                                        (ShaCheck
-                                         { _sha_check_id = Auto Nothing
-                                         , _sha_check_time = statTime
-                                         , _file_remote = remote
-                                         , _sha_check_absolute_path = pathText
-                                         , _mod_time = modTime
-                                         , _file_size = size
-                                         , _actual_checksum = checksumText
-                                         , _sc_file_info_id =
-                                             FileInfoId fileInfoID
-                                         }))
+                                        (mkShaCheck (FileInfoIdText fileInfoID
+                                                   &: StatTime statTime
+                                                   &: AbsPathText pathText
+                                                   &: ModTime modTime
+                                                   &: FileSize size
+                                                   &: Checksum checksumText
+                                                   &: ctx)))
                                      (when
                                         (masterRemote &&
                                          (_archive_checksum res) /=
@@ -513,18 +532,11 @@ checkFile2 ctx =
                            (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
                            (DB.None, Right stat)
                              | isRegularFile stat && masterRemote -> do
-                               let res =
-                                     (FileInfo
-                                      { _file_info_id = fileInfoID
-                                      , _seen_change = statTime
-                                      , _exited = Nothing
-                                      , _archive_checksum = Nothing
-                                      , _archive_file_size = Nothing
-                                      , _archive = archive
-                                      , _source_remote = remote
-                                      , _file_path = relText
-                                      , _file_name = nameText
-                                      })
+                               let res = (mkFileInfo (FileInfoIdText fileInfoID
+                                                   &: StatTime statTime
+                                                   &: RelativePathText relText
+                                                   &: Filename nameText
+                                                   &: ctx))
                                echo (repr ("Adding new file " ++ show absPath))
                                (insertFileInfo conn res)
                                (doCheck res stat)

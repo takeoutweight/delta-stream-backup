@@ -76,6 +76,12 @@ instance Wrapped AbsPath
 newtype AbsPathText = AbsPathText Text deriving (Show, Generic)
 instance Wrapped AbsPathText
 
+newtype RelativePathText = RelativePathText Text deriving (Show, Generic)
+instance Wrapped RelativePathText
+
+newtype Filename = Filename Text deriving (Show, Generic)
+instance Wrapped Filename
+
 newtype Rechecksum = Rechecksum (UTCTime -> Maybe UTCTime -> Bool) deriving (Generic)
 instance Wrapped Rechecksum
 
@@ -90,3 +96,6 @@ instance Wrapped FileSize
 
 newtype Checksum = Checksum Text deriving (Show, Generic)
 instance Wrapped Checksum
+
+newtype FileInfoIdText = FileInfoIdText Text deriving (Show, Generic)
+instance Wrapped FileInfoIdText
