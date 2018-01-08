@@ -205,6 +205,7 @@ newtype PathF = PathF String deriving Show
 
 -- Weird ghci has Record as output but not the "MHas" as input. Maybe ghci doesn't collapse constraint synonyms?
 -- mget :: MHas b rs => s b -> Record rs -> b
+-- The downside is if things in there are polymorphic you won't be able to pull them out easily - you need to monomorphize.
 mget rs = (rget Proxy rs) & getIdentity
 
 -- Can let the type pick it out. Neat!

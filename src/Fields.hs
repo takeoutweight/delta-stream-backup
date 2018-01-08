@@ -1,23 +1,33 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE PatternSynonyms #-}
+
+-- {-# LANGUAGE TypeOperators #-}
+-- {-# LANGUAGE DataKinds #-}
 
 module Fields where
 
+import Control.Lens ((&))
+import Data.Vinyl
+import Data.Proxy (Proxy(..))
+import qualified Data.Vinyl.Functor as VF
+import qualified Data.Vinyl.TypeLevel as VT
 import qualified Database.SQLite.Simple as SQ
 
-class HasRest (g :: * -> *) where
-  rest :: (g a) -> a
+type Record = Rec VF.Identity
 
-data Connection r = Connection SQ.Connection r
+pattern Nil :: Rec f '[]
+pattern Nil = RNil
 
-class HasConnection r where
-  connection :: r -> SQ.Connection
+type Has e rs = RElem e rs (VT.RIndex e rs)
 
-instance {-# OVERLAPPING #-} HasConnection (Connection r) where
-  connection (Connection c _) = c
+get :: Has e rs => Record rs -> e
+get rs = (rget Proxy rs) & VF.getIdentity
 
-instance {-# OVERLAPPING #-} (HasRest g, HasConnection a) => HasConnection (g a) where
-  connection = connection . rest
+rcons :: r -> Record rs -> Record (r : rs)
+rcons e rs = (VF.Identity e) :& rs
 
-instance {-# OVERLAPPING #-} HasRest Connection where
-  rest (Connection _ r) = r
+(&:) :: r -> Record rs -> Record (r : rs)
+e &: rs = rcons e rs
+infixr 5 &:
