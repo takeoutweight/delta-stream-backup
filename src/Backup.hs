@@ -327,6 +327,18 @@ insertFileGoneCheck conn fileGone =
      conn
      (runInsert (insert (_file_gone_check fileDB) (insertValues [fileGone]))))
 
+-- mkShaCheck ctx =
+--   (ShaCheck
+--    { _sha_check_id = Auto Nothing
+--    , _sha_check_time = statTime
+--    , _file_remote = remote
+--    , _sha_check_absolute_path = pathText
+--    , _mod_time = modTime
+--    , _file_size = size
+--    , _actual_checksum = checksumText
+--    , _sc_file_info_id = FileInfoId fileInfoID
+--    })
+
 insertShaCheck conn shaCheck =
   (withDatabaseDebug
      putStrLn
@@ -549,7 +561,7 @@ addTreeToDb2 ctx dirpath =
   let checks conn = do
         fp <- (lstree dirpath)
         checkFile2 (AbsPath fp &: conn &: ctx)
-  in SQ.withConnection (dbpath (fget ctx)) (\conn -> (sh (checks conn)))
+  in SQ.withConnection (nget DBPath ctx) (\conn -> (sh (checks conn)))
 
 addTreeDefaults =
   (  DBPath defaultDBFile

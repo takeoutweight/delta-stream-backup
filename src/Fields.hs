@@ -2,8 +2,9 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE PolyKinds #-}
 -- {-# LANGUAGE TypeOperators #-}
@@ -12,6 +13,7 @@
 module Fields where
 
 import Control.Lens ((&))
+import Control.Lens.Wrapped (Wrapped(..), op)
 import Data.Vinyl
 import Data.Proxy (Proxy(..))
 import Data.Text (Text)
@@ -20,6 +22,7 @@ import qualified Data.Vinyl.Functor as VF
 import qualified Data.Vinyl.TypeLevel as VT
 import qualified Database.SQLite.Simple as SQ
 import GHC.Exts (Constraint)
+import GHC.Generics (Generic)
 import Turtle (FilePath)
 import Prelude hiding (FilePath)
 
@@ -30,7 +33,17 @@ pattern Nil = RNil
 
 type Has e rs = RElem e rs (VT.RIndex e rs)
 
+-- | Pull from a record, where destination type picks the field
+fget :: Has e rs => Record rs -> e
 fget rs = (rget Proxy rs) & VF.getIdentity
+
+-- | Get unwrapped value by specifying the newtype wrapper
+nget ::
+     (Wrapped e, Has e rs)
+  => (Unwrapped e -> e)
+  -> Record rs
+  -> Unwrapped e
+nget ntc r = op ntc (fget r)
 
 fcons :: r -> Record rs -> Record (r : rs)
 fcons e rs = (VF.Identity e) :& rs
@@ -40,17 +53,24 @@ e &: rs = fcons e rs
 infixr 5 &:
 
 -- our fields
-  
-newtype DBPath = DBPath {dbpath :: String} deriving Show
 
-newtype Archive = Archive Text deriving Show
+newtype DBPath = DBPath String deriving (Show, Generic)
+instance Wrapped DBPath
 
-newtype Remote = Remote Text deriving Show
+newtype Archive = Archive Text deriving (Show, Generic)
+instance Wrapped Archive
 
-newtype MasterRemote = MasterRemote Bool deriving Show
+newtype Remote = Remote Text deriving (Show, Generic)
+instance Wrapped Remote
 
-newtype Root = Root FilePath deriving Show
+newtype MasterRemote = MasterRemote Bool deriving (Show, Generic)
+instance Wrapped MasterRemote
 
-newtype AbsPath = AbsPath {absPath :: FilePath} deriving Show
+newtype Root = Root FilePath deriving (Show, Generic)
+instance Wrapped Root
 
-newtype Rechecksum = Rechecksum (UTCTime -> Maybe UTCTime -> Bool)
+newtype AbsPath = AbsPath FilePath deriving (Show, Generic)
+instance Wrapped AbsPath
+
+newtype Rechecksum = Rechecksum (UTCTime -> Maybe UTCTime -> Bool) deriving (Generic)
+instance Wrapped Rechecksum
