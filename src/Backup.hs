@@ -497,6 +497,10 @@ checkFile2 ctx =
                  (Catch.onException
                     (do (SQ.execute_ conn "SAVEPOINT Backup_checkFile2")
                         statTime <- date
+                        let ctx2 = (   FileInfoIdText fileInfoID
+                                   &: AbsPathText pathText
+                                   &: StatTime statTime
+                                   &: ctx)
                         let doCheck res stat = do
                               echo "Found one"
                               let modTime =
@@ -512,13 +516,10 @@ checkFile2 ctx =
                                      let checksumText = (T.pack (show checksum))
                                      (insertShaCheck
                                         conn
-                                        (mkShaCheck (FileInfoIdText fileInfoID
-                                                   &: StatTime statTime
-                                                   &: AbsPathText pathText
-                                                   &: ModTime modTime
+                                        (mkShaCheck (  ModTime modTime
                                                    &: FileSize size
                                                    &: Checksum checksumText
-                                                   &: ctx)))
+                                                   &: ctx2)))
                                      (when
                                         (masterRemote &&
                                          (_archive_checksum res) /=
@@ -545,11 +546,9 @@ checkFile2 ctx =
                            (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
                            (DB.None, Right stat)
                              | isRegularFile stat && masterRemote -> do
-                               let res = (mkFileInfo (  FileInfoIdText fileInfoID
-                                                   &: StatTime statTime
-                                                   &: RelativePathText relText
+                               let res = (mkFileInfo (  RelativePathText relText
                                                    &: Filename nameText
-                                                   &: ctx))
+                                                   &: ctx2))
                                echo (repr ("Adding new file " ++ show absPath))
                                (insertFileInfo conn res)
                                (doCheck res stat)
@@ -557,10 +556,7 @@ checkFile2 ctx =
                              echo "gone"
                              (insertFileGoneCheck
                                 conn
-                                (mkFileGoneCheck (  FileInfoIdText fileInfoID
-                                               &: StatTime statTime
-                                               &: AbsPathText pathText
-                                               &: ctx)))
+                                (mkFileGoneCheck ctx2))
                              (when
                                 (masterRemote == True &&
                                  (_exited res) == Nothing)
