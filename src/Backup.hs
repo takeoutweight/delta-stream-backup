@@ -327,17 +327,28 @@ insertFileGoneCheck conn fileGone =
      conn
      (runInsert (insert (_file_gone_check fileDB) (insertValues [fileGone]))))
 
--- mkShaCheck ctx =
---   (ShaCheck
---    { _sha_check_id = Auto Nothing
---    , _sha_check_time = statTime
---    , _file_remote = remote
---    , _sha_check_absolute_path = pathText
---    , _mod_time = modTime
---    , _file_size = size
---    , _actual_checksum = checksumText
---    , _sc_file_info_id = FileInfoId fileInfoID
---    })
+mkShaCheck ::
+     ( Has StatTime rs
+     , Has Remote rs
+     , Has AbsPathText rs
+     , Has ModTime rs
+     , Has FileSize rs
+     , Has Checksum rs
+     , Has FileInfoId rs
+     )
+  => Record rs
+  -> ShaCheck
+mkShaCheck ctx =
+  (ShaCheck
+   { _sha_check_id = Auto Nothing
+   , _sha_check_time = nget StatTime ctx
+   , _file_remote = nget Remote ctx
+   , _sha_check_absolute_path = nget AbsPathText ctx
+   , _mod_time = nget ModTime ctx
+   , _file_size = nget FileSize ctx
+   , _actual_checksum = nget Checksum ctx
+   , _sc_file_info_id = fget ctx -- FileInfoId fileInfoID
+   })
 
 insertShaCheck conn shaCheck =
   (withDatabaseDebug

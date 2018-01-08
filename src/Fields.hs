@@ -72,5 +72,21 @@ instance Wrapped Root
 newtype AbsPath = AbsPath FilePath deriving (Show, Generic)
 instance Wrapped AbsPath
 
+-- | Because conversion of paths to text can fail
+newtype AbsPathText = AbsPathText Text deriving (Show, Generic)
+instance Wrapped AbsPathText
+
 newtype Rechecksum = Rechecksum (UTCTime -> Maybe UTCTime -> Bool) deriving (Generic)
 instance Wrapped Rechecksum
+
+newtype StatTime = StatTime UTCTime deriving (Show, Generic)
+instance Wrapped StatTime
+
+newtype ModTime = ModTime UTCTime deriving (Show, Generic)
+instance Wrapped ModTime
+
+newtype FileSize = FileSize Int deriving (Show, Generic)
+instance Wrapped FileSize
+
+newtype Checksum = Checksum Text deriving (Show, Generic)
+instance Wrapped Checksum
