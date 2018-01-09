@@ -51,6 +51,7 @@ import qualified Database.SQLite.Simple.ToField as SQTF
 import qualified Filesystem.Path.CurrentOS as FP
 import Prelude hiding (FilePath, head)
 import qualified System.IO.Error as Error
+import qualified System.Random as Random
 import Turtle hiding (select)
 import qualified Turtle.Bytes as TB
 import Control.Lens hiding ((:>), Fold, cons)
@@ -506,15 +507,17 @@ doCheck ctx res stat = do
                     , _archive_file_size = Just size
                     })))))
 
-withSavepoint :: SQ.Connection -> SQ.Query -> IO a -> IO (Maybe a)
-withSavepoint conn spName a =
+-- | Runs the action in a transaction, rolling back on any unhandled exception
+withSavepoint :: SQ.Connection -> IO a -> IO (Maybe a)
+withSavepoint conn a = do
+  gensym <- fmap (("Backup_withSavepoint" <>) . fromString . show . (`mod` 1000000000)) ((Random.randomIO) :: IO Int)
   Catch.onException
-    (do (SQ.execute_ conn ("SAVEPOINT " <> spName))
+    (do (SQ.execute_ conn ("SAVEPOINT " <> gensym))
         r <- a
-        (SQ.execute_ conn ("RELEASE " <> spName))
+        (SQ.execute_ conn ("RELEASE " <> gensym))
         return (Just r))
-    (do (SQ.execute_ conn ("ROLLBACK TO " <> spName))
-        (SQ.execute_ conn ("RELEASE Backup_checkFile2" <> spName))
+    (do (SQ.execute_ conn ("ROLLBACK TO " <> gensym))
+        (SQ.execute_ conn ("RELEASE " <> gensym))
         return Nothing)
 
 {- | Given an absolute path, check it - creating the required logical entry if
@@ -548,7 +551,7 @@ checkFile2 ctx =
             , FP.toText (filename absPath)) of
          (Right relText, Right pathText, Right nameText) ->
            let fileInfoID = (T.intercalate ":" [archive, relText])
-           in (withSavepoint conn "Backup_checkFile2"
+           in (withSavepoint conn
                  (do statTime <- date
                      let ctx2 = (   FileInfoIdText fileInfoID
                                 &: AbsPathText pathText
