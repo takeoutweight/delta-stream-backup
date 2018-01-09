@@ -550,55 +550,54 @@ checkFile2 ctx =
             , FP.toText absPath
             , FP.toText (filename absPath)) of
          (Right relText, Right pathText, Right nameText) ->
-           let fileInfoID = (T.intercalate ":" [archive, relText])
-           in (withSavepoint conn
-                 (do statTime <- date
-                     let ctx2 = (   FileInfoIdText fileInfoID
-                                &: AbsPathText pathText
-                                &: StatTime statTime
-                                &: ctx)
-                     fileStatus :: Either () FileStatus <-
-                       (Catch.tryJust
-                          (guard . Error.isDoesNotExistError)
-                          (lstat absPath))
-                     result :: DB.SelectOne FileInfo <-
-                       (getFileInfo conn fileInfoID)
-                     (case (result, fileStatus) of
-                        (DB.Some _ _, _) ->
-                          err
-                            (repr ("Many existed!? Error!" ++ show absPath))
-                        (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
-                        (DB.None, Right stat)
-                          | isRegularFile stat && masterRemote -> do
-                            let res = (mkFileInfo (  RelativePathText relText
-                                                &: Filename nameText
-                                                &: ctx2))
-                            echo (repr ("Adding new file " ++ show absPath))
-                            (insertFileInfo conn res)
-                            (doCheck ctx2 res stat)
-                        (DB.One res, Left _) -> do
-                          echo "gone"
-                          (insertFileGoneCheck
-                             conn
-                             (mkFileGoneCheck ctx2))
-                          (when
-                             (masterRemote == True &&
-                              (_exited res) == Nothing)
-                             (updateFileInfo
-                                conn
-                                (res
-                                 { _seen_change = statTime
-                                 , _exited = Just statTime
-                                 , _archive_checksum = Nothing
-                                 , _archive_file_size = Nothing
-                                 })))
-                        (DB.One res, Right stat)
-                          | isRegularFile stat -> doCheck ctx2 res stat
-                        _ ->
-                          err
-                            (repr
-                               ("Can't process file (is it a regular file?)" ++
-                                show absPath))))) & fmap (const ())
+           (withSavepoint conn
+             (do statTime <- date
+                 let ctx2 = (   FileInfoIdText (T.intercalate ":" [archive, relText])
+                            &: AbsPathText pathText
+                            &: StatTime statTime
+                            &: ctx)
+                 fileStatus :: Either () FileStatus <-
+                   (Catch.tryJust
+                      (guard . Error.isDoesNotExistError)
+                      (lstat absPath))
+                 result :: DB.SelectOne FileInfo <-
+                   (getFileInfo conn (nget FileInfoIdText ctx2))
+                 (case (result, fileStatus) of
+                    (DB.Some _ _, _) ->
+                      err
+                        (repr ("Many existed!? Error!" ++ show absPath))
+                    (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
+                    (DB.None, Right stat)
+                      | isRegularFile stat && masterRemote -> do
+                        let res = (mkFileInfo (  RelativePathText relText
+                                            &: Filename nameText
+                                            &: ctx2))
+                        echo (repr ("Adding new file " ++ show absPath))
+                        (insertFileInfo conn res)
+                        (doCheck ctx2 res stat)
+                    (DB.One res, Left _) -> do
+                      echo "gone"
+                      (insertFileGoneCheck
+                         conn
+                         (mkFileGoneCheck ctx2))
+                      (when
+                         (masterRemote == True &&
+                          (_exited res) == Nothing)
+                         (updateFileInfo
+                            conn
+                            (res
+                             { _seen_change = statTime
+                             , _exited = Just statTime
+                             , _archive_checksum = Nothing
+                             , _archive_file_size = Nothing
+                             })))
+                    (DB.One res, Right stat)
+                      | isRegularFile stat -> doCheck ctx2 res stat
+                    _ ->
+                      err
+                        (repr
+                           ("Can't process file (is it a regular file?)" ++
+                            show absPath))))) & fmap (const ())
          a ->
            err
              (repr
