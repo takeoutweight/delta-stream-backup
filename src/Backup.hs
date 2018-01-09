@@ -506,12 +506,22 @@ doCheck ctx res stat = do
                     , _archive_file_size = Just size
                     })))))
 
+withSavepoint :: SQ.Connection -> SQ.Query -> IO a -> IO (Maybe a)
+withSavepoint conn spName a =
+  Catch.onException
+    (do (SQ.execute_ conn ("SAVEPOINT " <> spName))
+        r <- a
+        (SQ.execute_ conn ("RELEASE " <> spName))
+        return (Just r))
+    (do (SQ.execute_ conn ("ROLLBACK TO " <> spName))
+        (SQ.execute_ conn ("RELEASE Backup_checkFile2" <> spName))
+        return Nothing)
+
 {- | Given an absolute path, check it - creating the required logical entry if
      needed. This is for ingesting new files.
 -}
 checkFile2 ::
-  ( MonadIO io
-  , Has SQ.Connection r
+  ( Has SQ.Connection r
   , Has Archive r
   , Has Remote r
   , Has MasterRemote r
@@ -519,15 +529,13 @@ checkFile2 ::
   , Has AbsPath r
   , Has Rechecksum r)
   => Record r
-  -> io ()
+  -> IO ()
 checkFile2 ctx =
   let conn :: SQ.Connection = (fget ctx)
       Archive archive = (fget ctx)
-      Remote remote = (fget ctx)
       MasterRemote masterRemote = (fget ctx)
       Root root = (fget ctx)
-      AbsPath absPath = (fget ctx)
-      Rechecksum rechecksum = (fget ctx) in
+      AbsPath absPath = (fget ctx) in
   case stripPrefix (ensureTrailingSlash root) absPath of
     Nothing ->
       err
@@ -540,60 +548,54 @@ checkFile2 ctx =
             , FP.toText (filename absPath)) of
          (Right relText, Right pathText, Right nameText) ->
            let fileInfoID = (T.intercalate ":" [archive, relText])
-           in (liftIO
-                 (Catch.onException
-                    (do (SQ.execute_ conn "SAVEPOINT Backup_checkFile2")
-                        statTime <- date
-                        let ctx2 = (   FileInfoIdText fileInfoID
-                                   &: AbsPathText pathText
-                                   &: StatTime statTime
-                                   &: ctx)
-                        fileStatus :: Either () FileStatus <-
-                          (Catch.tryJust
-                             (guard . Error.isDoesNotExistError)
-                             (lstat absPath))
-                        result :: DB.SelectOne FileInfo <-
-                          (getFileInfo conn fileInfoID)
-                        (case (result, fileStatus) of
-                           (DB.Some _ _, _) ->
-                             err
-                               (repr ("Many existed!? Error!" ++ show absPath))
-                           (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
-                           (DB.None, Right stat)
-                             | isRegularFile stat && masterRemote -> do
-                               let res = (mkFileInfo (  RelativePathText relText
-                                                   &: Filename nameText
-                                                   &: ctx2))
-                               echo (repr ("Adding new file " ++ show absPath))
-                               (insertFileInfo conn res)
-                               (doCheck ctx2 res stat)
-                           (DB.One res, Left _) -> do
-                             echo "gone"
-                             (insertFileGoneCheck
+           in (withSavepoint conn "Backup_checkFile2"
+                 (do statTime <- date
+                     let ctx2 = (   FileInfoIdText fileInfoID
+                                &: AbsPathText pathText
+                                &: StatTime statTime
+                                &: ctx)
+                     fileStatus :: Either () FileStatus <-
+                       (Catch.tryJust
+                          (guard . Error.isDoesNotExistError)
+                          (lstat absPath))
+                     result :: DB.SelectOne FileInfo <-
+                       (getFileInfo conn fileInfoID)
+                     (case (result, fileStatus) of
+                        (DB.Some _ _, _) ->
+                          err
+                            (repr ("Many existed!? Error!" ++ show absPath))
+                        (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
+                        (DB.None, Right stat)
+                          | isRegularFile stat && masterRemote -> do
+                            let res = (mkFileInfo (  RelativePathText relText
+                                                &: Filename nameText
+                                                &: ctx2))
+                            echo (repr ("Adding new file " ++ show absPath))
+                            (insertFileInfo conn res)
+                            (doCheck ctx2 res stat)
+                        (DB.One res, Left _) -> do
+                          echo "gone"
+                          (insertFileGoneCheck
+                             conn
+                             (mkFileGoneCheck ctx2))
+                          (when
+                             (masterRemote == True &&
+                              (_exited res) == Nothing)
+                             (updateFileInfo
                                 conn
-                                (mkFileGoneCheck ctx2))
-                             (when
-                                (masterRemote == True &&
-                                 (_exited res) == Nothing)
-                                (updateFileInfo
-                                   conn
-                                   (res
-                                    { _seen_change = statTime
-                                    , _exited = Just statTime
-                                    , _archive_checksum = Nothing
-                                    , _archive_file_size = Nothing
-                                    })))
-                           (DB.One res, Right stat)
-                             | isRegularFile stat -> doCheck ctx2 res stat
-                           _ ->
-                             err
-                               (repr
-                                  ("Can't process file (is it a regular file?)" ++
-                                   show absPath)))
-                        (SQ.execute_ conn "RELEASE Backup_checkFile2")
-                        return ())
-                    (do (SQ.execute_ conn "ROLLBACK TO Backup_checkFile2")
-                        (SQ.execute_ conn "RELEASE Backup_checkFile2"))))
+                                (res
+                                 { _seen_change = statTime
+                                 , _exited = Just statTime
+                                 , _archive_checksum = Nothing
+                                 , _archive_file_size = Nothing
+                                 })))
+                        (DB.One res, Right stat)
+                          | isRegularFile stat -> doCheck ctx2 res stat
+                        _ ->
+                          err
+                            (repr
+                               ("Can't process file (is it a regular file?)" ++
+                                show absPath))))) & fmap (const ())
          a ->
            err
              (repr
@@ -604,7 +606,7 @@ checkFile2 ctx =
 addTreeToDb2 ctx dirpath =
   let checks conn = do
         fp <- (lstree dirpath)
-        checkFile2 (AbsPath fp &: conn &: ctx)
+        liftIO (checkFile2 (AbsPath fp &: conn &: ctx))
   in SQ.withConnection (nget DBPath ctx) (\conn -> (sh (checks conn)))
 
 addTreeDefaults =
