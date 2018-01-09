@@ -55,6 +55,7 @@ import qualified System.Random as Random
 import Turtle hiding (select)
 import qualified Turtle.Bytes as TB
 import Control.Lens hiding ((:>), Fold, cons)
+import qualified Data.Vinyl as V
 import Data.Vinyl.Lens (RElem)
 import Data.Vinyl.TypeLevel (RIndex)
 
@@ -460,6 +461,7 @@ checkFile3 r = do
 -- this is OK (fmap get ([(3 &: Nil)] :: [Record '[Int]])) :: [Int]
 -- but this works: :t (\r -> ((get r) :: Int)) . (\r -> r & fcons (3 :: Int)) So maybe just something with the monad?
 
+-- | if we're due for a recheck, calculate the sha and add an entry to the db.
 doCheck ::
      ( Has AbsPath rs
      , Has StatTime rs
@@ -471,46 +473,41 @@ doCheck ::
      , Has MasterRemote rs
      )
   => Record rs
-  -> FileInfoT Identity
+  -> FileInfo
   -> FileStatus
   -> IO ()
 doCheck ctx res stat = do
-      let conn :: SQ.Connection = (fget ctx)
-      let modTime =
-            POSIX.posixSecondsToUTCTime
-              (modificationTime stat)
-      lastCheck :: Maybe ShaCheck <-
-        (getRecentFileCheck2 conn (nget FileInfoIdText ctx))
-      (when
-         ((nget Rechecksum ctx)
-            (nget StatTime ctx)
-            (fmap _sha_check_time lastCheck))
-         (do (size, checksum) <- inSizeAndSha (nget AbsPath ctx)
-             let checksumText = (T.pack (show checksum))
-             (insertShaCheck
-                conn
-                (mkShaCheck (  ModTime modTime
-                           &: FileSize size
-                           &: Checksum checksumText
-                           &: ctx)))
-             (when
-                ((nget MasterRemote ctx) &&
-                 (_archive_checksum res) /=
-                 (Just checksumText))
-                (updateFileInfo
-                   conn
-                   (res
-                    { _seen_change = (nget StatTime ctx)
-                    , _exited = Nothing
-                    , _archive_checksum =
-                        Just checksumText
-                    , _archive_file_size = Just size
-                    })))))
+  let conn :: SQ.Connection = (fget ctx)
+  let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
+  lastCheck :: Maybe ShaCheck <-
+    (getRecentFileCheck2 conn (nget FileInfoIdText ctx))
+  (when
+     ((nget Rechecksum ctx) (nget StatTime ctx) (fmap _sha_check_time lastCheck))
+     (do (size, checksum) <- inSizeAndSha (nget AbsPath ctx)
+         let checksumText = (T.pack (show checksum))
+         (insertShaCheck
+            conn
+            (mkShaCheck
+               (ModTime modTime &: FileSize size &: Checksum checksumText &: ctx)))
+         (when
+            ((nget MasterRemote ctx) &&
+             (_archive_checksum res) /= (Just checksumText))
+            (updateFileInfo
+               conn
+               (res
+                { _seen_change = (nget StatTime ctx)
+                , _exited = Nothing
+                , _archive_checksum = Just checksumText
+                , _archive_file_size = Just size
+                })))))
 
 -- | Runs the action in a transaction, rolling back on any unhandled exception
 withSavepoint :: SQ.Connection -> IO a -> IO (Maybe a)
 withSavepoint conn a = do
-  gensym <- fmap (("Backup_withSavepoint" <>) . fromString . show . (`mod` 1000000000)) ((Random.randomIO) :: IO Int)
+  gensym <-
+    fmap
+      (("Backup_withSavepoint" <>) . fromString . show . (`mod` 1000000000))
+      ((Random.randomIO) :: IO Int)
   Catch.onException
     (do (SQ.execute_ conn ("SAVEPOINT " <> gensym))
         r <- a
@@ -520,17 +517,65 @@ withSavepoint conn a = do
         (SQ.execute_ conn ("RELEASE " <> gensym))
         return Nothing)
 
+foundNewFile ::
+     ( Has AbsPath r
+     , Has Filename r
+     , Has RelativePathText r
+     , Has Remote r
+     , Has Archive r
+     , Has StatTime r
+     , Has FileInfoIdText r
+     , Has SQ.Connection r
+     , Has Rechecksum r
+     , Has AbsPathText r
+     , Has MasterRemote r
+     )
+  => Record r
+  -> FileStatus
+  -> IO ()
+foundNewFile ctx stat = do
+  let res = mkFileInfo ctx
+  echo (repr ("Adding new file " ++ show (nget AbsPath ctx)))
+  (insertFileInfo ((fget ctx) :: SQ.Connection) res)
+  (doCheck ctx res stat)
+
+foundGoneFile ::
+     ( Has SQ.Connection r
+     , Has StatTime r
+     , Has Remote r
+     , Has AbsPathText r
+     , Has FileInfoIdText r
+     , Has MasterRemote r
+     )
+  => Record r
+  -> FileInfo
+  -> IO ()
+foundGoneFile ctx res = do
+  echo "gone"
+  (insertFileGoneCheck ((fget ctx) :: SQ.Connection) (mkFileGoneCheck ctx))
+  (when
+     ((nget MasterRemote ctx) == True && (_exited res) == Nothing)
+     (updateFileInfo
+        ((fget ctx) :: SQ.Connection)
+        (res
+         { _seen_change = (nget StatTime ctx)
+         , _exited = Just (nget StatTime ctx)
+         , _archive_checksum = Nothing
+         , _archive_file_size = Nothing
+         })))
+
 {- | Given an absolute path, check it - creating the required logical entry if
      needed. This is for ingesting new files.
 -}
 checkFile2 ::
-  ( Has SQ.Connection r
-  , Has Archive r
-  , Has Remote r
-  , Has MasterRemote r
-  , Has Root r
-  , Has AbsPath r
-  , Has Rechecksum r)
+     ( Has SQ.Connection r
+     , Has Archive r
+     , Has Remote r
+     , Has MasterRemote r
+     , Has Root r
+     , Has AbsPath r
+     , Has Rechecksum r
+     )
   => Record r
   -> IO ()
 checkFile2 ctx =
@@ -538,71 +583,56 @@ checkFile2 ctx =
       Archive archive = (fget ctx)
       MasterRemote masterRemote = (fget ctx)
       Root root = (fget ctx)
-      AbsPath absPath = (fget ctx) in
-  case stripPrefix (ensureTrailingSlash root) absPath of
-    Nothing ->
-      err
-        (repr
-           ("Can't determine relative Path: " ++
-            show root ++ "," ++ show absPath))
-    Just relative ->
-      (case ( FP.toText relative
-            , FP.toText absPath
-            , FP.toText (filename absPath)) of
-         (Right relText, Right pathText, Right nameText) ->
-           (withSavepoint conn
-             (do statTime <- date
-                 let ctx2 = (   FileInfoIdText (T.intercalate ":" [archive, relText])
-                            &: AbsPathText pathText
-                            &: StatTime statTime
-                            &: ctx)
-                 fileStatus :: Either () FileStatus <-
-                   (Catch.tryJust
-                      (guard . Error.isDoesNotExistError)
-                      (lstat absPath))
-                 result :: DB.SelectOne FileInfo <-
-                   (getFileInfo conn (nget FileInfoIdText ctx2))
-                 (case (result, fileStatus) of
-                    (DB.Some _ _, _) ->
-                      err
-                        (repr ("Many existed!? Error!" ++ show absPath))
-                    (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
-                    (DB.None, Right stat)
-                      | isRegularFile stat && masterRemote -> do
-                        let res = (mkFileInfo (  RelativePathText relText
-                                            &: Filename nameText
-                                            &: ctx2))
-                        echo (repr ("Adding new file " ++ show absPath))
-                        (insertFileInfo conn res)
-                        (doCheck ctx2 res stat)
-                    (DB.One res, Left _) -> do
-                      echo "gone"
-                      (insertFileGoneCheck
-                         conn
-                         (mkFileGoneCheck ctx2))
-                      (when
-                         (masterRemote == True &&
-                          (_exited res) == Nothing)
-                         (updateFileInfo
-                            conn
-                            (res
-                             { _seen_change = statTime
-                             , _exited = Just statTime
-                             , _archive_checksum = Nothing
-                             , _archive_file_size = Nothing
-                             })))
-                    (DB.One res, Right stat)
-                      | isRegularFile stat -> doCheck ctx2 res stat
-                    _ ->
-                      err
-                        (repr
-                           ("Can't process file (is it a regular file?)" ++
-                            show absPath))))) & fmap (const ())
-         a ->
-           err
-             (repr
-                ("Can't textify path: " ++
-                 show root ++ ", " ++ show absPath ++ " : " ++ show a)))
+      AbsPath absPath = (fget ctx)
+  in case stripPrefix (ensureTrailingSlash root) absPath of
+       Nothing ->
+         err
+           (repr
+              ("Can't determine relative Path: " ++
+               show root ++ "," ++ show absPath))
+       Just relative ->
+         (case ( FP.toText relative
+               , FP.toText absPath
+               , FP.toText (filename absPath)) of
+            (Right relText, Right pathText, Right nameText) ->
+              (withSavepoint
+                 conn
+                 (do statTime <- date
+                     let ctx2 =
+                           (FileInfoIdText
+                              (T.intercalate ":" [archive, relText]) &:
+                            RelativePathText relText &:
+                            AbsPathText pathText &:
+                            Filename nameText &:
+                            StatTime statTime &:
+                            ctx)
+                     fileStatus :: Either () FileStatus <-
+                       (Catch.tryJust
+                          (guard . Error.isDoesNotExistError)
+                          (lstat absPath))
+                     result :: DB.SelectOne FileInfo <-
+                       (getFileInfo conn (nget FileInfoIdText ctx2))
+                     (case (result, fileStatus) of
+                        (DB.Some _ _, _) ->
+                          err (repr ("Many existed!? Error!" ++ show absPath))
+                        (DB.None, Left _) -> return () -- didn't find the file but didn't have a record of it either.
+                        (DB.None, Right stat)
+                          | isRegularFile stat && masterRemote ->
+                            foundNewFile ctx2 stat
+                        (DB.One res, Left _) -> foundGoneFile ctx2 res
+                        (DB.One res, Right stat)
+                          | isRegularFile stat -> doCheck ctx2 res stat
+                        _ ->
+                          err
+                            (repr
+                               ("Can't process file (is it a regular file?)" ++
+                                show absPath))))) &
+              fmap (const ())
+            a ->
+              err
+                (repr
+                   ("Can't textify path: " ++
+                    show root ++ ", " ++ show absPath ++ " : " ++ show a)))
 
 -- | Walks dirpath recursively
 addTreeToDb2 ctx dirpath =
