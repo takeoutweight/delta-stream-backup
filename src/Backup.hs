@@ -13,8 +13,8 @@
 
 -- {-# LANGUAGE ConstraintKinds #-}
 -- {-# LANGUAGE KindSignatures #-}
--- {-# LANGUAGE TypeOperators #-}
--- {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE DataKinds #-}
 
 -- :set -XOverloadedStrings
 
@@ -567,7 +567,7 @@ foundGoneFile ctx res = do
 {- | Given an absolute path, check it - creating the required logical entry if
      needed. This is for ingesting new files.
 -}
-checkFile2 ::
+ingestFile ::
      ( Has SQ.Connection r
      , Has Archive r
      , Has Remote r
@@ -578,7 +578,7 @@ checkFile2 ::
      )
   => Record r
   -> IO ()
-checkFile2 ctx =
+ingestFile ctx =
   let conn :: SQ.Connection = (fget ctx)
       Archive archive = (fget ctx)
       MasterRemote masterRemote = (fget ctx)
@@ -635,13 +635,13 @@ checkFile2 ctx =
                     show root ++ ", " ++ show absPath ++ " : " ++ show a)))
 
 -- | Walks dirpath recursively
-addTreeToDb2 ctx dirpath =
+ingestPath ctx dirpath =
   let checks conn = do
         fp <- (lstree dirpath)
-        liftIO (checkFile2 (AbsPath fp &: conn &: ctx))
+        liftIO (ingestFile (AbsPath fp &: conn &: ctx))
   in SQ.withConnection (nget DBPath ctx) (\conn -> (sh (checks conn)))
 
-addTreeDefaults =
+defaultCtx =
   (  DBPath defaultDBFile
   &: Archive "archie"
   &: Remote "Nates-MBP-2014"
@@ -651,7 +651,7 @@ addTreeDefaults =
   &: Nil
   )
 
--- addTreeToDb2 addTreeDefaults "/Users/nathan/Pictures/2013/2013-05-15/"
+-- ingestPath defaultCtx "/Users/nathan/Pictures/2013/2013-05-15/"
 
 -- | uses the first filename as the filename of the target.
 cpToDir :: MonadIO io => FilePath -> FilePath -> io ()
