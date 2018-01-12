@@ -133,28 +133,6 @@ outputWithChecksum fp bs =
        (writeonly fp)
        (\h -> foldIO bs ((appendFold h) *> F.generalize shasum)))
 
-thisMachine = "Nathans-MacBook-Pro-2" :: T.Text
-
-thisArchive = "main-archive" :: T.Text
-
--- copied from Database.Beam.Sqlite.Syntax to allow UTCTime. Not sure this is
--- right, but seems like the LocalTime that we can write out of the box doesn't
--- serialize the timezone. You can specify timezone in the column, but what
--- enforces you writing the same time-zone back into the DB if you change that
--- later? Besides - Turtle uses UTCTime so this is easier.
-emitValue :: SQ.SQLData -> BSS.SqliteSyntax
-emitValue v = SqliteSyntax (BSB.byteString "?") (DL.singleton v)
-
-instance HasSqlValueSyntax SqliteValueSyntax UTCTime where
-  sqlValueSyntax tm =
-    SqliteValueSyntax (emitValue (SQ.SQLText (fromString tmStr)))
-    where
-      tmStr =
-        DT.formatTime
-          DT.defaultTimeLocale
-          (DT.iso8601DateFormat (Just "%H:%M:%S%Q"))
-          tm
-
 data ShaCheckT f = ShaCheck
   { _sha_check_id :: Columnar f (Auto Int)
   , _sha_check_time :: Columnar f UTCTime

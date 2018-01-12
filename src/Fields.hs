@@ -100,3 +100,15 @@ instance Wrapped Checksum
 
 newtype FileInfoIdText = FileInfoIdText Text deriving (Show, Generic)
 instance Wrapped FileInfoIdText
+
+newtype EventNumber = EventNumber Int deriving (Show, Generic)
+instance Wrapped EventNumber
+
+newtype Deleted = Deleted Bool deriving (Show, Generic)
+instance Wrapped Deleted
+
+newtype EncryptionKey = EncryptionKey Text deriving (Show, Generic)
+instance Wrapped EncryptionKey
+
+newtype Superceded = Superceded Bool deriving (Show, Generic)
+instance Wrapped Superceded

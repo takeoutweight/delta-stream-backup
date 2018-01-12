@@ -263,3 +263,5 @@ class (RElem e rs (VT.RIndex e rs)) => Has6 e rs where
 -- undecidable
 -- instance (VT.RIndex r (s : rs) ~ VT.S i, RElem r rs i) => Has e (s : rs) where
 --   get = undefined
+
+--- Q: Can we have calculated values in our records? I.e. lenses to values that aren't really there but affect other values? Thinking of eg getting the sql version of a Bool or SUM type. Annoying to have to store those directly.
