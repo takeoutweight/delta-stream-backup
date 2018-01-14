@@ -177,14 +177,14 @@ doCheck ::
   -> IO ()
 doCheck ctx prevState stat = do
   let conn :: SQ.Connection = (fget ctx)
+  let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
   (when
      ((nget Rechecksum ctx)
         (nget StatTime ctx)
-        (nget StatTime (unFileState prevState)) -- TODO shoul check modtime too, which would force a re-check
+        (nget StatTime (unFileState prevState)) -- TODO should check modtime too, which would force a re-check
       )
      (do (size, checksum) <- inSizeAndSha (nget AbsPath ctx)
          let checksumText = (T.pack (show checksum))
-         let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
          let ctx2 =
                (ModTime modTime &: --
                 FileSize size &:
