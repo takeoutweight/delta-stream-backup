@@ -5,30 +5,37 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE DataKinds #-}
 -- {-# LANGUAGE TypeSynonymInstances #-}
 -- {-# LANGUAGE TypeApplications #-}
 
 module Schema where
 
+import qualified Control.Exception as CE
+import qualified Control.Monad.Catch as Catch
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.DList as DL
 import Data.Functor.Identity (Identity)
 import Data.Monoid ((<>))
+import Data.String (fromString)
 import Data.Text (Text)
 import Data.Time.Clock (UTCTime)
-import Data.String (fromString)
 import qualified Data.Time as DT
 import qualified Data.Text as T
 import Database.Beam.Sqlite.Syntax 
 import Database.Beam.Backend.SQL.SQL92 (HasSqlValueSyntax(..))
 import qualified Data.String.Combinators as SC
-import Database.Beam (Auto, Beamable, Columnar, Database, DatabaseSettings, PrimaryKey, Table, TableEntity, defaultDbSettings, withDatabaseDebug, runSelectReturningOne, select, orderBy_, desc_, guard_, val_, (==.), all_)
+import Database.Beam
+       (Auto, Beamable, Columnar, Database, DatabaseSettings, PrimaryKey,
+        Table, TableEntity, (==.), all_, defaultDbSettings, desc_, guard_,
+        orderBy_, runSelectReturningOne, select, val_, withDatabaseDebug)
 import Database.Beam
 import Database.Beam.Sqlite
 import qualified Database.Beam as B
 import qualified Database.Beam.Sqlite.Syntax as BSS
 import qualified Database.SQLite.Simple as SQ
 import GHC.Generics (Generic)
+import qualified System.Random as Random
 
 -- import qualified DBHelpers as DB
 import Fields
@@ -60,11 +67,11 @@ data FileStateT f = FileStateT
    , _relative_path :: Columnar f Text
    , _filename :: Columnar f Text
    , _deleted :: Columnar f Int
-   , _mod_time :: Columnar f UTCTime
-   , _file_size :: Columnar f Int
-   , _checksum :: Columnar f Text
-   , _encrypted :: Columnar f Int
-   , _encryption_key_id :: Columnar f Text
+   , _mod_time :: Columnar (Nullable f) UTCTime
+   , _file_size :: Columnar (Nullable f) Int
+   , _checksum :: Columnar (Nullable f) Text
+   , _encrypted :: Columnar (Nullable f) Int
+   , _encryption_key_id :: Columnar (Nullable f) Text
    , _superceded :: Columnar f Int
    , _provenance_type :: Columnar f Int
    , _provenance_id :: PrimaryKey FileStateT (Nullable f)
@@ -111,10 +118,6 @@ deriving instance Show FileState
 
 deriving instance Eq FileState
 
--- deriving instance Show (FileStateT (Nullable Identity)) -- This always required for a nullable mixin?
--- deriving instance Eq (FileStateT (Nullable Identity))
--- deriving instance Show (PrimaryKey FileStateT (Nullable Identity))
--- deriving instance Eq (PrimaryKey FileStateT (Nullable Identity))
 instance Beamable FileStateT
 
 instance Table FileStateT where
@@ -124,8 +127,156 @@ instance Table FileStateT where
 
 instance Beamable (PrimaryKey FileStateT)
 
-getFileState :: SQ.Connection -> Int -> IO (Maybe FileState)
-getFileState conn fileStateID =
+-- | Makes the file state for a not-deleted file
+mkFileState ::
+     ( Has StatTime rs
+     , Has Remote rs
+     , Has RelativePathText rs
+     , Has AbsPathText rs
+     , Has Filename rs
+     , Has ModTime rs
+     , Has FileSize rs
+     , Has Checksum rs
+     , Has IsEncrypted rs
+     , Has FileInfoIdText rs
+     )
+  => Record rs
+  -> FileState
+mkFileState ctx =
+  (FileStateT
+   { _file_state_id = Auto Nothing
+   , _remote = nget Remote ctx
+   , _sequence_number = 0 -- TODO
+   , _check_time = nget StatTime ctx
+   , _absolute_path = nget AbsPathText ctx
+   , _relative_path = nget RelativePathText ctx
+   , _filename = nget Filename ctx
+   , _deleted = 0
+   , _mod_time = Just (nget ModTime ctx)
+   , _file_size = Just (nget FileSize ctx)
+   , _checksum = Just (nget Checksum ctx)
+   , _encrypted =
+       Just
+         (case ((fget ctx) :: IsEncrypted) of
+            Unencrypted -> 0
+            Encrypted _ -> 1)
+   , _encryption_key_id =
+       case ((fget ctx) :: IsEncrypted) of
+         Unencrypted -> Nothing
+         Encrypted k -> Just k
+   , _superceded = 0 -- TODO
+   , _provenance_type = 0 -- TODO
+   , _provenance_id = FileStateId Nothing -- TODO FileInfoId (nget FileInfoIdText ctx)
+   })
+
+mkGoneFileState :: 
+     ( Has StatTime rs
+     , Has Remote rs
+     , Has RelativePathText rs
+     , Has AbsPathText rs
+     , Has Filename rs
+     , Has FileInfoIdText rs
+     )
+  => Record rs
+  -> FileState
+mkGoneFileState ctx =
+  (FileStateT
+   { _file_state_id = Auto Nothing
+   , _remote = nget Remote ctx
+   , _sequence_number = 0 -- TODO
+   , _check_time = nget StatTime ctx
+   , _absolute_path = nget AbsPathText ctx
+   , _relative_path = nget RelativePathText ctx
+   , _filename = nget Filename ctx
+   , _deleted = 1
+   , _mod_time = Nothing
+   , _file_size = Nothing
+   , _checksum = Nothing
+   , _encrypted = Nothing
+   , _encryption_key_id = Nothing
+   , _superceded = 0 -- TODO
+   , _provenance_type = 0 -- TODO
+   , _provenance_id = FileStateId Nothing -- TODO FileInfoId (nget FileInfoIdText ctx)
+   })
+
+data BadDBEncodingException = BadDBEncodingException
+  { table :: !Text
+  , id :: !(Auto Int)
+  , errMsg :: !Text
+  } deriving (Show, Typeable)
+
+instance CE.Exception BadDBEncodingException
+
+type FileStateF = Record '[ Remote, SequenceNumber, StatTime, AbsPathText, RelativePathText, Filename, Superceded, Provenance, FileDetails]
+
+-- | Can throw BadDBEncodingException if the assumptions are violated (which shouldn't happen if we're in control of the DB)
+unFileState ::
+     FileState
+  -> FileStateF
+unFileState fs
+    -- FileStateIdF (_file_state_id fs) &: --
+ =
+  Remote (_remote fs) &: --
+  SequenceNumber (_sequence_number fs) &:
+  StatTime (_check_time fs) &:
+  AbsPathText (_absolute_path fs) &:
+  RelativePathText (_relative_path fs) &:
+  Filename (_filename fs) &:
+  Superceded
+    (case (_superceded fs) of
+       0 -> False
+       1 -> True
+       _ ->
+         CE.throw
+           (BadDBEncodingException
+              "file_state"
+              (_file_state_id fs)
+              "Superceded not 0 or 1")) &:
+  -- Provenance
+  (case ((_provenance_type fs), undefined) {-(_provenance_id fs)-}
+         of
+     (0, Just pid) -> Mirror pid
+     (1, Nothing) -> Novel
+     (2, Nothing) -> Unexpected
+     _ ->
+       CE.throw
+         (BadDBEncodingException
+            "file_state"
+            (_file_state_id fs)
+            "Bad provenance encoding")) &:
+  FileDetails
+    (case ( (_deleted fs)
+          , (_mod_time fs)
+          , (_file_size fs)
+          , (_checksum fs)
+          , (_encrypted fs)
+          , (_encryption_key_id fs)) of
+       (1, Nothing, Nothing, Nothing, Nothing, Nothing) -> Nothing
+       (0, Just mt, Just fsz, Just cs, Just enc, encKey) ->
+         Just
+           (ModTime mt &: --
+            FileSize fsz &:
+            Checksum cs &:
+            (case (enc, encKey) of
+               (0, Nothing) -> Unencrypted
+               (1, Just id) -> Encrypted id
+               _ ->
+                 CE.throw
+                   (BadDBEncodingException
+                      "file_state"
+                      (_file_state_id fs)
+                      "Bad encryption encoding")) &:
+            Nil)
+       _ ->
+         CE.throw
+           (BadDBEncodingException
+              "file_state"
+              (_file_state_id fs)
+              "Unexpected data stored on with respect to deleted/undeleted status")) &:
+  Nil
+
+getFileStateById :: SQ.Connection -> Int -> IO (Maybe FileState)
+getFileStateById conn fileStateID =
   (withDatabaseDebug
      putStrLn
      conn
@@ -134,6 +285,41 @@ getFileState conn fileStateID =
            (do fileState <- all_ (_file_state fileDB)
                guard_ ((_file_state_id fileState) ==. val_ (Auto (Just fileStateID)))
                pure fileState))))
+
+-- Could probably go via archive and relative path too - these are denormalized.
+
+getFileState ::
+     (Has Remote rs, Has Archive rs, Has AbsPath rs)
+  => SQ.Connection
+  -> Record rs
+  -> IO (Maybe FileState)
+getFileState conn ctx = undefined
+--   (withDatabaseDebug
+--      putStrLn
+--      conn
+--      (runSelectReturningOne
+--         (select
+--            (orderBy_
+--               (\s -> (desc_ (_check_time s)))
+--               (do shaCheck <- all_ (_file_state fileDB)
+--                   guard_
+--                     ((_sc_file_info_id shaCheck) ==.
+--                      val_ (FileInfoId fileInfoID))
+--                   return shaCheck)))))
+
+updateFileState :: SQ.Connection -> FileState -> IO ()
+updateFileState conn fileState =
+    (withDatabaseDebug
+     putStrLn
+     conn
+     (runUpdate (save (_file_state fileDB) fileState)))
+
+insertFileState :: SQ.Connection -> FileState -> IO ()
+insertFileState conn fileState =
+  (withDatabaseDebug
+     putStrLn
+     conn
+     (runInsert (insert (_file_state fileDB) (insertValues [fileState]))))
 
 createFileStateSequenceCounterTable :: SQ.Query
 createFileStateSequenceCounterTable =

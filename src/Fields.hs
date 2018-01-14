@@ -49,6 +49,9 @@ nget ntc r = op ntc (fget r)
 fcons :: r -> Record rs -> Record (r : rs)
 fcons e rs = (VF.Identity e) :& rs
 
+fappend :: Record as -> Record bs -> Record (as VT.++ bs)
+fappend = rappend
+
 (&:) :: r -> Record rs -> Record (r : rs)
 e &: rs = fcons e rs
 infixr 5 &:
@@ -83,7 +86,7 @@ instance Wrapped RelativePathText
 newtype Filename = Filename Text deriving (Show, Generic)
 instance Wrapped Filename
 
-newtype Rechecksum = Rechecksum (UTCTime -> Maybe UTCTime -> Bool) deriving (Generic)
+newtype Rechecksum = Rechecksum (UTCTime -> UTCTime -> Bool) deriving (Generic)
 instance Wrapped Rechecksum
 
 newtype StatTime = StatTime UTCTime deriving (Show, Generic)
@@ -107,8 +110,21 @@ instance Wrapped EventNumber
 newtype Deleted = Deleted Bool deriving (Show, Generic)
 instance Wrapped Deleted
 
-newtype EncryptionKey = EncryptionKey Text deriving (Show, Generic)
-instance Wrapped EncryptionKey
+-- Where the text is the key id used. This is only if the SYSTEM is handling the encryption. It won't detect files that happen to be encrypted on their own.
+data IsEncrypted = Encrypted Text | Unencrypted deriving (Show, Generic)
 
 newtype Superceded = Superceded Bool deriving (Show, Generic)
 instance Wrapped Superceded
+
+newtype FileStateIdF = FileStateIdF Int deriving (Show, Generic)
+instance Wrapped FileStateIdF
+
+newtype SequenceNumber = SequenceNumber Int deriving (Show, Generic)
+instance Wrapped SequenceNumber
+
+data Provenance = Mirror Int | Novel | Unexpected deriving (Show, Generic)
+
+newtype FileDetails =
+  FileDetails (Maybe (Record '[ ModTime, FileSize, Checksum, IsEncrypted]))
+  deriving (Show, Generic)
+instance Wrapped FileDetails

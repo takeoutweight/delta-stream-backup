@@ -10,6 +10,8 @@ import qualified Control.Monad.Catch as Catch
 import qualified Control.Monad.IO.Class as CM
 import Data.Typeable (Typeable)
 import GHC.Generics (Generic)
+import Data.String (fromString)
+import Data.Monoid ((<>))
 import qualified Database.Beam as DB
 import qualified Database.Beam.Backend.SQL as DBS
 import qualified Database.Beam.Backend.SQL.SQL92 as SQL92
@@ -107,9 +109,25 @@ myAll_
                     s))
 myAll_ = DBQ.all_
 
--- | Executes the action w/in a savepoint, exceptions rollback.
-withSavepoint :: (CM.MonadIO io, Catch.MonadMask io) => SQ.Connection -> io a -> io a
-withSavepoint conn action =
+-- | Runs the action in a transaction, rolling back on any unhandled exception
+withSavepoint :: SQ.Connection -> IO a -> IO (Maybe a)
+withSavepoint conn a = do
+  gensym <-
+    fmap
+      (("Backup_withSavepoint" <>) . fromString . show . (`mod` 1000000000))
+      ((Random.randomIO) :: IO Int)
+  Catch.onException
+    (do (SQ.execute_ conn ("SAVEPOINT " <> gensym))
+        r <- a
+        (SQ.execute_ conn ("RELEASE " <> gensym))
+        return (Just r))
+    (do (SQ.execute_ conn ("ROLLBACK TO " <> gensym))
+        (SQ.execute_ conn ("RELEASE " <> gensym))
+        return Nothing)
+
+-- | Executes the action w/in a savepoint, exceptions rollback. (was this version better? I forget? I think this is the exception re-throwing version which is maybe better. Might have to release on the exception handler too?)
+withSavepoint2 :: (CM.MonadIO io, Catch.MonadMask io) => SQ.Connection -> io a -> io a
+withSavepoint2 conn action =
   Catch.mask $ \restore -> do
     idInt <- CM.liftIO Random.randomIO
     let savepoint = SQ.Only ("svpt" ++ show (mod idInt (1000000000 :: Int)))
