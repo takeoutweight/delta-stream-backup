@@ -180,7 +180,8 @@ doCheck ctx prevState stat = do
   (when
      ((nget Rechecksum ctx)
         (nget StatTime ctx)
-        (nget StatTime (unFileState prevState))) -- TODO shoul check modtime too, which would force a re-check
+        (nget StatTime (unFileState prevState)) -- TODO shoul check modtime too, which would force a re-check
+      )
      (do (size, checksum) <- inSizeAndSha (nget AbsPath ctx)
          let checksumText = (T.pack (show checksum))
          let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
@@ -190,11 +191,18 @@ doCheck ctx prevState stat = do
                 Checksum checksumText &:
                 Unencrypted &:
                 ctx)
-         case (nget FileDetails (unFileState prevState)) of
+         let ufs = (unFileState prevState)
+         case (nget FileDetails ufs) of
            Nothing -> (insertFileState conn (mkFileState ctx2))
            Just fds ->
              case ((nget Checksum fds) == checksumText) of
-               True -> (updateFileState conn (mkFileState ctx2)) -- TODO Bump check time
+               True ->
+                 (updateFileState
+                    conn
+                    (mkFileState
+                       (FileInfoIdText "TODO" &: --
+                        ((fget ctx) :: StatTime) &:
+                        (fappend fds ufs))))
                False -> (insertFileState conn (mkFileState ctx2)) -- TODO Okay if we're the authority
       ))
 
