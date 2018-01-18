@@ -72,7 +72,8 @@ data FileStateT f = FileStateT
    , _checksum :: Columnar (Nullable f) Text
    , _encrypted :: Columnar (Nullable f) Int
    , _encryption_key_id :: Columnar (Nullable f) Text
-   , _superceded :: Columnar f Int
+   , _actual :: Columnar f Int
+   , _canonical :: Columnar f Int
    , _provenance_type :: Columnar f Int
    , _provenance_id :: PrimaryKey FileStateT (Nullable f)
   } deriving (Generic)
@@ -97,7 +98,8 @@ createFileStateTable =
            , "checksum TEXT"
            , "encrypted INTEGER"
            , "encryption_key_id TEXT"
-           , "superceded INTEGER"
+           , "actual INTEGER"
+           , "canonical INTEGER"
            , "provenance_type INTEGER" -- MIRRRORED, INGESTED, UNEXPECTEDLY_CHANGED
            , "provenance_id__file_state_id INTEGER"
            ])))
@@ -129,22 +131,25 @@ instance Beamable (PrimaryKey FileStateT)
 
 -- | Makes the file state for a not-deleted file
 mkFileState ::
-     ( Has StatTime rs
+     ( Has (Maybe Int) rs -- FileStateIdF
+     , Has StatTime rs
      , Has Remote rs
      , Has RelativePathText rs
      , Has AbsPathText rs
      , Has Filename rs
-     , Has ModTime rs
-     , Has FileSize rs
-     , Has Checksum rs
-     , Has IsEncrypted rs
-     , Has FileInfoIdText rs
+     , Has Canonical rs
+     , Has Actual rs
+--   , Has (FileDetails (Maybe (Record fdr))) rs
+--     , Has (FileDetails (Record fdr)) rs
+     , Has (Record fdr) rs
+     , Has ModTime fdr
+--     , HasFileDetails fdr
      )
   => Record rs
   -> FileState
 mkFileState ctx =
   (FileStateT
-   { _file_state_id = Auto Nothing
+   { _file_state_id = Auto ((fget ctx) :: Maybe Int)
    , _remote = nget Remote ctx
    , _sequence_number = 0 -- TODO
    , _check_time = nget StatTime ctx
@@ -152,30 +157,39 @@ mkFileState ctx =
    , _relative_path = nget RelativePathText ctx
    , _filename = nget Filename ctx
    , _deleted = 0
-   , _mod_time = Just (nget ModTime ctx)
-   , _file_size = Just (nget FileSize ctx)
-   , _checksum = Just (nget Checksum ctx)
-   , _encrypted =
-       Just
-         (case ((fget ctx) :: IsEncrypted) of
-            Unencrypted -> 0
-            Encrypted _ -> 1)
-   , _encryption_key_id =
-       case ((fget ctx) :: IsEncrypted) of
-         Unencrypted -> Nothing
-         Encrypted k -> Just k
-   , _superceded = 0 -- TODO
+   , _mod_time = let therec = ((fget ctx) :: (Record fdr)) in
+                   Just (nget ModTime therec)
+   , _file_size = undefined -- Just (nget FileSize ctx)
+   , _checksum = undefined -- \Just (nget Checksum ctx)
+   , _encrypted = undefined
+--       fmap
+--         (\fd ->
+--            (case fget fd of
+--               Unencrypted -> 0
+--               Encrypted _ -> 1))
+--         (fget ctx)
+   , _encryption_key_id = undefined
+--       case fget ctx of
+--         Unencrypted -> Nothing
+--         Encrypted k -> Just k
+   , _canonical =
+       case fget ctx of
+         NonCanonical -> 0
+         Canonical -> 1
+   , _actual =
+       case fget ctx of
+         Historical -> 0
+         Actual -> 1
    , _provenance_type = 0 -- TODO
    , _provenance_id = FileStateId Nothing -- TODO FileInfoId (nget FileInfoIdText ctx)
    })
 
-mkGoneFileState :: 
+mkGoneFileState ::
      ( Has StatTime rs
      , Has Remote rs
      , Has RelativePathText rs
      , Has AbsPathText rs
      , Has Filename rs
-     , Has FileInfoIdText rs
      )
   => Record rs
   -> FileState
@@ -194,10 +208,39 @@ mkGoneFileState ctx =
    , _checksum = Nothing
    , _encrypted = Nothing
    , _encryption_key_id = Nothing
-   , _superceded = 0 -- TODO
+   , _canonical = 0 -- TODO
+   , _actual = 0 -- TODO
    , _provenance_type = 0 -- TODO
    , _provenance_id = FileStateId Nothing -- TODO FileInfoId (nget FileInfoIdText ctx)
    })
+
+-- updateGoneFileState ::
+--      ( Has StatTime rs
+--      , Has Remote rs
+--      , Has RelativePathText rs
+--      , Has AbsPathText rs
+--      , Has Filename rs
+--      )
+--   => Record rs
+--   -> FileState
+-- updateGoneFileState ctx =
+--   (FileStateT
+--    { _file_state_id = Auto Nothing
+--    , _remote = nget Remote ctx
+--    , _sequence_number = 0 -- TODO
+--    , _check_time = nget StatTime ctx
+--    , _absolute_path = nget AbsPathText ctx
+--    , _relative_path = nget RelativePathText ctx
+--    , _filename = nget Filename ctx
+--    , _deleted = 1
+--    , _mod_time = Nothing
+--    , _file_size = Nothing
+--    , _checksum = Nothing
+--    , _encrypted = Nothing
+--    , _encryption_key_id = Nothing
+--    , _provenance_type = 0 -- TODO
+--    , _provenance_id = FileStateId Nothing -- TODO FileInfoId (nget FileInfoIdText ctx)
+--    })
 
 data BadDBEncodingException = BadDBEncodingException
   { table :: !Text
@@ -207,7 +250,7 @@ data BadDBEncodingException = BadDBEncodingException
 
 instance CE.Exception BadDBEncodingException
 
-type FileStateF = Record '[ Remote, SequenceNumber, StatTime, AbsPathText, RelativePathText, Filename, Superceded, Provenance, FileDetails]
+type FileStateF = Record '[ Remote, SequenceNumber, StatTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
 
 -- | Can throw BadDBEncodingException if the assumptions are violated (which shouldn't happen if we're in control of the DB)
 unFileState ::
@@ -222,29 +265,36 @@ unFileState fs
   AbsPathText (_absolute_path fs) &:
   RelativePathText (_relative_path fs) &:
   Filename (_filename fs) &:
-  Superceded
-    (case (_superceded fs) of
-       0 -> False
-       1 -> True
-       _ ->
-         CE.throw
-           (BadDBEncodingException
-              "file_state"
-              (_file_state_id fs)
-              "Superceded not 0 or 1")) &:
   -- Provenance
   (case ((_provenance_type fs), undefined) {-(_provenance_id fs)-}
          of
-     (0, Just pid) -> Mirror pid
-     (1, Nothing) -> Novel
-     (2, Nothing) -> Unexpected
+     (0, Just pid) -> Mirrored pid
+     (1, Nothing) -> Ingested
      _ ->
        CE.throw
          (BadDBEncodingException
             "file_state"
             (_file_state_id fs)
             "Bad provenance encoding")) &:
-  FileDetails
+  (case (_canonical fs) of
+     0 -> NonCanonical
+     1 -> Canonical
+     _ ->
+       CE.throw
+         (BadDBEncodingException
+            "file_state"
+            (_file_state_id fs)
+            "Bad Canonical encoding")) &:
+  (case (_actual fs) of
+     0 -> Historical
+     1 -> Actual
+     _ ->
+       CE.throw
+         (BadDBEncodingException
+            "file_state"
+            (_file_state_id fs)
+            "Bad Actual encoding")) &:
+    FileDetailsR
     (case ( (_deleted fs)
           , (_mod_time fs)
           , (_file_size fs)

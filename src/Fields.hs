@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 {-# LANGUAGE ConstraintKinds #-}
@@ -86,7 +87,7 @@ instance Wrapped RelativePathText
 newtype Filename = Filename Text deriving (Show, Generic)
 instance Wrapped Filename
 
-newtype Rechecksum = Rechecksum (UTCTime -> UTCTime -> Bool) deriving (Generic)
+newtype Rechecksum = Rechecksum (UTCTime ->  UTCTime -> Bool) deriving (Generic)
 instance Wrapped Rechecksum
 
 newtype StatTime = StatTime UTCTime deriving (Show, Generic)
@@ -113,18 +114,25 @@ instance Wrapped Deleted
 -- Where the text is the key id used. This is only if the SYSTEM is handling the encryption. It won't detect files that happen to be encrypted on their own.
 data IsEncrypted = Encrypted Text | Unencrypted deriving (Show, Generic)
 
-newtype Superceded = Superceded Bool deriving (Show, Generic)
-instance Wrapped Superceded
-
 newtype FileStateIdF = FileStateIdF Int deriving (Show, Generic)
 instance Wrapped FileStateIdF
 
 newtype SequenceNumber = SequenceNumber Int deriving (Show, Generic)
 instance Wrapped SequenceNumber
 
-data Provenance = Mirror Int | Novel | Unexpected deriving (Show, Generic)
+data Provenance = Mirrored Int | Ingested deriving (Show, Generic)
 
-newtype FileDetails =
-  FileDetails (Maybe (Record '[ ModTime, FileSize, Checksum, IsEncrypted]))
+data Canonical = NonCanonical | Canonical deriving (Show, Generic)
+
+data Actual = Historical | Actual  deriving (Show, Generic)
+
+type HasFileDetails rs = (Has ModTime rs, Has FileSize rs, Has Checksum rs, Has IsEncrypted rs)
+
+newtype FileDetails = FileDetails r deriving (Show, Generic)
+instance Wrapped (FileDetails r)
+
+-- | Concrete type for return values
+newtype FileDetailsR =
+  FileDetailsR (Maybe (Record '[ ModTime, FileSize, Checksum, IsEncrypted]))
   deriving (Show, Generic)
-instance Wrapped FileDetails
+instance Wrapped FileDetailsR

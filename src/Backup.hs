@@ -158,13 +158,13 @@ checkFile3 r = do
 
 -- TODO supercede previous state
 -- TODO Re-order and possibly synomize all these constraints
--- | if we're due for a recheck, calculate the sha and add an entry to the db.
+-- | We have a previous state for a path. If we're due for a recheck, calculate
+-- the sha and add an entry to the db.
 doCheck ::
      ( Has AbsPath rs
      , Has Filename rs
      , Has StatTime rs
      , Has Rechecksum rs
-     , Has FileInfoIdText rs
      , Has SQ.Connection rs
      , Has Remote rs
      , Has RelativePathText rs
@@ -179,10 +179,11 @@ doCheck ctx prevState stat = do
   let conn :: SQ.Connection = (fget ctx)
   let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
   (when
-     ((nget Rechecksum ctx)
-        (nget StatTime ctx)
-        (nget StatTime (unFileState prevState)) -- TODO should check modtime too, which would force a re-check
-      )
+     (((nget Rechecksum ctx)
+         (nget StatTime ctx)
+         (nget StatTime (unFileState prevState))) ||
+      (Just modTime /=
+       (fmap (nget ModTime) (nget FileDetails (unFileState prevState)))))
      (do (size, checksum) <- inSizeAndSha (nget AbsPath ctx)
          let checksumText = (T.pack (show checksum))
          let ctx2 =
@@ -192,16 +193,25 @@ doCheck ctx prevState stat = do
                 Unencrypted &:
                 ctx)
          let ufs = (unFileState prevState)
-         case (nget FileDetails ufs) of
-           Nothing -> (insertFileState conn (mkFileState ctx2))
+         case (nget FileDetails ufs)
+           -- If upstream deletes a file, can a down-stream re-use the name for its own files now
+               of
+           Nothing ->
+             (DB.withSavepoint
+                conn
+                (do (insertFileState conn (mkFileState ctx2))
+                    (updateFileState
+                       conn
+                       (mkGoneFileState (Superceded True &: ufs)) -- FIXME This will auto ID
+                     ))) &
+             void
            Just fds ->
              case ((nget Checksum fds) == checksumText) of
                True ->
                  (updateFileState
                     conn
                     (mkFileState
-                       (FileInfoIdText "TODO" &: --
-                        ((fget ctx) :: StatTime) &:
+                       (((fget ctx) :: StatTime) &: --
                         (fappend fds ufs))))
                False -> (insertFileState conn (mkFileState ctx2)) -- TODO Okay if we're the authority
       ))
@@ -213,7 +223,6 @@ foundNewFile ::
      , Has Remote r
      , Has Archive r
      , Has StatTime r
-     , Has FileInfoIdText r
      , Has SQ.Connection r
      , Has Rechecksum r
      , Has AbsPathText r
@@ -235,7 +244,7 @@ foundNewFile ctx stat =  do
          Checksum checksumText &:
          Unencrypted &:
          ctx)))
-  
+
 -- TODO Supercede previous state
 foundGoneFile ::
      ( Has SQ.Connection r
@@ -244,7 +253,6 @@ foundGoneFile ::
      , Has Filename r
      , Has RelativePathText r
      , Has AbsPathText r
-     , Has FileInfoIdText r
      , Has MasterRemote r
      )
   => Record r
@@ -295,7 +303,6 @@ checkFile ctx =
                             AbsPathText pathText &:
                             Filename nameText &:
                             StatTime statTime &:
-                            FileInfoIdText "TODO" &: -- Is this provencance? Probably should name it something else
                             ctx)
                      fileStatus :: Either () FileStatus <-
                        (Catch.tryJust
@@ -314,7 +321,7 @@ checkFile ctx =
                             (repr
                                ("Can't process file (is it a regular file?)" ++
                                 show absPath))))) &
-              fmap (const ())
+              void
             a ->
               err
                 (repr
