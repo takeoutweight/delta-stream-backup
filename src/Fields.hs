@@ -128,10 +128,6 @@ data Actual = Historical | Actual  deriving (Show, Generic)
 
 type HasFileDetails rs = (Has ModTime rs, Has FileSize rs, Has Checksum rs, Has IsEncrypted rs)
 
-newtype FileDetails = FileDetails r deriving (Show, Generic)
-instance Wrapped (FileDetails r)
-
--- | Concrete type for return values
 newtype FileDetailsR =
   FileDetailsR (Maybe (Record '[ ModTime, FileSize, Checksum, IsEncrypted]))
   deriving (Show, Generic)

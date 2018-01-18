@@ -137,13 +137,10 @@ mkFileState ::
      , Has RelativePathText rs
      , Has AbsPathText rs
      , Has Filename rs
+     , Has Provenance rs
      , Has Canonical rs
      , Has Actual rs
---   , Has (FileDetails (Maybe (Record fdr))) rs
---     , Has (FileDetails (Record fdr)) rs
-     , Has (Record fdr) rs
-     , Has ModTime fdr
---     , HasFileDetails fdr
+     , Has FileDetailsR rs
      )
   => Record rs
   -> FileState
@@ -157,21 +154,20 @@ mkFileState ctx =
    , _relative_path = nget RelativePathText ctx
    , _filename = nget Filename ctx
    , _deleted = 0
-   , _mod_time = let therec = ((fget ctx) :: (Record fdr)) in
-                   Just (nget ModTime therec)
-   , _file_size = undefined -- Just (nget FileSize ctx)
-   , _checksum = undefined -- \Just (nget Checksum ctx)
-   , _encrypted = undefined
---       fmap
---         (\fd ->
---            (case fget fd of
---               Unencrypted -> 0
---               Encrypted _ -> 1))
---         (fget ctx)
-   , _encryption_key_id = undefined
---       case fget ctx of
---         Unencrypted -> Nothing
---         Encrypted k -> Just k
+   , _mod_time = fmap (nget ModTime) (nget FileDetailsR ctx)
+   , _file_size = fmap (nget FileSize) (nget FileDetailsR ctx)
+   , _checksum = fmap (nget Checksum) (nget FileDetailsR ctx)
+   , _encrypted =
+       fmap
+         (\fd ->
+            (case fget fd of
+               Unencrypted -> 0
+               Encrypted _ -> 1))
+         (nget FileDetailsR ctx)
+   , _encryption_key_id =
+       (case fmap fget (nget FileDetailsR ctx) of
+          Just (Encrypted k) -> Just k
+          _ -> Nothing)
    , _canonical =
        case fget ctx of
          NonCanonical -> 0
@@ -180,8 +176,14 @@ mkFileState ctx =
        case fget ctx of
          Historical -> 0
          Actual -> 1
-   , _provenance_type = 0 -- TODO
-   , _provenance_id = FileStateId Nothing -- TODO FileInfoId (nget FileInfoIdText ctx)
+   , _provenance_type =
+       case fget ctx of
+         Mirrored _ -> 0
+         Ingested -> 1
+   , _provenance_id =
+       case fget ctx of
+         Mirrored i -> FileStateId (Just (Auto (Just i)))
+         Ingested -> FileStateId Nothing
    })
 
 mkGoneFileState ::
