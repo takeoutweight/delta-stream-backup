@@ -232,8 +232,7 @@ checkFile ctx =
                           err
                             (repr
                                ("Can't process file (is it a regular file?)" ++
-                                show absPath))))) &
-              void
+                                show absPath)))))
             a ->
               err
                 (repr
@@ -263,6 +262,6 @@ defaultCtx =
 cpToDir :: MonadIO io => FilePath -> FilePath -> io ()
 cpToDir from toDir = cp from (toDir </> (filename from))
 
--- rm (fromString (nget DBPath defaultCtx))
+-- do { rm (fromString (nget DBPath defaultCtx)) ; createDB (nget DBPath defaultCtx) }
 -- createDB (nget DBPath defaultCtx)
 -- ingestPath defaultCtx "/Users/nathan/Pictures/2013/2013-05-15/"

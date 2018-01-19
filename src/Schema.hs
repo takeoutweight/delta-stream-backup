@@ -410,8 +410,8 @@ createFileStateSequenceCounterTable =
 
 nextSequenceNumber :: (Has SQ.Connection rs, Has Remote rs) => Record rs -> IO Int
 nextSequenceNumber ctx =
---  DB.withSavepoint2
---    (fget ctx)
+  DB.withSavepoint
+    (fget ctx)
     (do r <-
           SQ.query
             (fget ctx)

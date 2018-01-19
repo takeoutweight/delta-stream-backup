@@ -110,8 +110,8 @@ myAll_
 myAll_ = DBQ.all_
 
 -- | Runs the action in a transaction, rolling back on any unhandled exception
-withSavepoint :: SQ.Connection -> IO a -> IO (Maybe a)
-withSavepoint conn a = do
+withSavepointM :: SQ.Connection -> IO a -> IO (Maybe a)
+withSavepointM conn a = do
   gensym <-
     fmap
       (("Backup_withSavepoint" <>) . fromString . show . (`mod` 1000000000))
@@ -126,14 +126,20 @@ withSavepoint conn a = do
         return Nothing)
 
 -- | Executes the action w/in a savepoint, exceptions rollback. (was this version better? I forget? I think this is the exception re-throwing version which is maybe better. Might have to release on the exception handler too?)
-withSavepoint2 :: (CM.MonadIO io, Catch.MonadMask io) => SQ.Connection -> io a -> io a
-withSavepoint2 conn action =
+withSavepoint :: (CM.MonadIO io, Catch.MonadMask io) => SQ.Connection -> io a -> io a
+withSavepoint conn action =
   Catch.mask $ \restore -> do
     idInt <- CM.liftIO Random.randomIO
-    let savepoint = SQ.Only ("svpt" ++ show (mod idInt (1000000000 :: Int)))
-    CM.liftIO (SQ.execute conn "SAVEPOINT ?" savepoint)
-    r <- (restore action) `Catch.onException` (CM.liftIO (SQ.execute conn "ROLLBACK TO ?" savepoint))
-    CM.liftIO (SQ.execute conn "RELEASE ?" savepoint)
+    let savepoint =
+          ("Backup_withSavepoint2" <>
+           fromString (show (mod idInt (1000000000 :: Int))))
+    CM.liftIO (SQ.execute_ conn ("SAVEPOINT " <> savepoint))
+    r <-
+      (restore action) `Catch.onException`
+      (CM.liftIO
+         (do (SQ.execute_ conn ("ROLLBACK TO " <> savepoint))
+             (SQ.execute_ conn ("RELEASE " <> savepoint))))
+    CM.liftIO (SQ.execute_ conn ("RELEASE " <> savepoint))
     return r
 
 -- TODO: make a Database.Beam.Sqlite.Connection.runInsertReturningList using withSavepoint
