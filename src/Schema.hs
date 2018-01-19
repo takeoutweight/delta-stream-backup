@@ -192,7 +192,8 @@ mkFileState ctx =
          Ingested -> FileStateId Nothing
    })
 
--- | Inserts as Actual, disabling any previous state's Actuality if its not already known to be gone
+-- | Inserts as Actual, disabling any previous state's Actuality if its not
+-- already known to be gone
 insertGoneFileState ::
      ( Has SQ.Connection rs
      , Has StatTime rs
@@ -225,8 +226,10 @@ insertGoneFileState ctx =
           Just (fs, Just _) -> do
             updateFileState (fget ctx) (mkFileState (Historical &: fs))
             insert
-          Nothing -> insert
+          Nothing -> return () -- no need for a gone entry for a file that was never seen.
 
+-- | Inserts as Actual, disabling any previous state's Actuality if its not
+-- already known to be gone
 insertDetailedFileState ::
      ( Has SQ.Connection rs
      , Has StatTime rs
@@ -238,8 +241,9 @@ insertDetailedFileState ::
      , HasFileDetails rs
      )
   => Record rs
+  -> Maybe FileStateF
   -> IO ()
-insertDetailedFileState ctx =
+insertDetailedFileState ctx prevState =
   let insert =
         (do sequence <- nextSequenceNumber ctx
             (insertFileState
@@ -249,18 +253,17 @@ insertDetailedFileState ctx =
                    FileDetailsR (Just (fcast ctx)) &:
                    NonCanonical &:
                    ctx))))
-  in do afs <- getActualFileState ctx
-        case afs of
-          Just fs ->
-            case (nget FileDetailsR fs) == Just (fcast ctx) of
-              True ->
-                updateFileState
-                  (fget ctx)
-                  (mkFileState (((fget ctx) :: StatTime) &: fs))
-              False -> do
-                updateFileState (fget ctx) (mkFileState (Historical &: fs))
-                insert
-          Nothing -> insert
+  in case prevState of
+       Just fs ->
+         case (nget FileDetailsR fs) == Just (fcast ctx) of
+           True ->
+             updateFileState
+               (fget ctx)
+               (mkFileState (((fget ctx) :: StatTime) &: fs))
+           False -> do
+             updateFileState (fget ctx) (mkFileState (Historical &: fs))
+             insert
+       Nothing -> insert
 
 data BadDBEncodingException = BadDBEncodingException
   { table :: !Text

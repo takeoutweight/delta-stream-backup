@@ -160,7 +160,7 @@ checkFile3 r = do
 -- TODO Re-order and possibly synomize all these constraints
 -- | We have a previous state for a path. If we're due for a recheck, calculate
 -- the sha and add an entry to the db.
-doCheck ::
+maybeCheck ::
      ( Has AbsPath rs
      , Has Filename rs
      , Has StatTime rs
@@ -170,100 +170,31 @@ doCheck ::
      , Has RelativePathText rs
      , Has AbsPathText rs
      , Has MasterRemote rs
+     , Has Provenance rs
      )
   => Record rs
-  -> FileState
   -> FileStatus
   -> IO ()
-doCheck ctx prevState stat = do
-  let conn :: SQ.Connection = (fget ctx)
+maybeCheck ctx stat = do
   let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
-  (when
-     (((nget Rechecksum ctx)
-         (nget StatTime ctx)
-         (nget StatTime (unFileState prevState))) ||
-      (Just modTime /=
-       (fmap (nget ModTime) (nget FileDetails (unFileState prevState)))))
-     (do (size, checksum) <- inSizeAndSha (nget AbsPath ctx)
-         let checksumText = (T.pack (show checksum))
-         let ctx2 =
-               (ModTime modTime &: --
-                FileSize size &:
-                Checksum checksumText &:
-                Unencrypted &:
-                ctx)
-         let ufs = (unFileState prevState)
-         case (nget FileDetails ufs)
-           -- If upstream deletes a file, can a down-stream re-use the name for its own files now
-               of
-           Nothing ->
-             (DB.withSavepoint
-                conn
-                (do (insertFileState conn (mkFileState ctx2))
-                    (updateFileState
-                       conn
-                       (mkGoneFileState (Superceded True &: ufs)) -- FIXME This will auto ID
-                     ))) &
-             void
-           Just fds ->
-             case ((nget Checksum fds) == checksumText) of
-               True ->
-                 (updateFileState
-                    conn
-                    (mkFileState
-                       (((fget ctx) :: StatTime) &: --
-                        (fappend fds ufs))))
-               False -> (insertFileState conn (mkFileState ctx2)) -- TODO Okay if we're the authority
-      ))
-
-foundNewFile ::
-     ( Has AbsPath r
-     , Has Filename r
-     , Has RelativePathText r
-     , Has Remote r
-     , Has Archive r
-     , Has StatTime r
-     , Has SQ.Connection r
-     , Has Rechecksum r
-     , Has AbsPathText r
-     , Has MasterRemote r
-     )
-  => Record r
-  -> FileStatus
-  -> IO ()
-foundNewFile ctx stat =  do
-  echo (repr ("Adding new file " ++ show (nget AbsPath ctx)))
-  (size, checksum) <- inSizeAndSha (nget AbsPath ctx)
-  let checksumText = (T.pack (show checksum))
-  let modTime = POSIX.posixSecondsToUTCTime (modificationTime stat)
-  (insertFileState
-     ((fget ctx) :: SQ.Connection)
-     (mkFileState
-        (ModTime modTime &: --
-         FileSize size &:
-         Checksum checksumText &:
-         Unencrypted &:
-         ctx)))
-
--- TODO Supercede previous state
-foundGoneFile ::
-     ( Has SQ.Connection r
-     , Has StatTime r
-     , Has Remote r
-     , Has Filename r
-     , Has RelativePathText r
-     , Has AbsPathText r
-     , Has MasterRemote r
-     )
-  => Record r
-  -> FileState
-  -> IO ()
-foundGoneFile ctx prevState = do
-  echo "gone"
-  case (nget FileDetails (unFileState prevState)) of
-    Nothing ->
-      (insertFileState ((fget ctx) :: SQ.Connection) (mkGoneFileState ctx))
-    Just x -> undefined -- TODO OK if we're the master, bad if we're a mirror
+  mPrevState <- (getActualFileState ctx)
+  let check = do
+        (size, checksum) <- inSizeAndSha (nget AbsPath ctx)
+        let checksumText = (T.pack (show checksum))
+        let ctx2 =
+              (ModTime modTime &: --
+               FileSize size &:
+               Checksum checksumText &:
+               Unencrypted &:
+               ctx)
+        insertDetailedFileState ctx2 mPrevState
+  case mPrevState of
+    Nothing -> check
+    Just prevState ->
+      (when
+         (((nget Rechecksum ctx) (nget StatTime ctx) (nget StatTime prevState)) ||
+          (Just modTime /= (fmap (nget ModTime) (nget FileDetailsR prevState))))
+         check)
 
 {- | Given an absolute path, check it - creating the required logical entry if
      needed. This is for ingesting new files.
@@ -276,6 +207,7 @@ checkFile ::
      , Has Root r
      , Has AbsPath r
      , Has Rechecksum r
+     , Has Provenance r
      )
   => Record r
   -> IO ()
@@ -308,14 +240,10 @@ checkFile ctx =
                        (Catch.tryJust
                           (guard . Error.isDoesNotExistError)
                           (lstat absPath))
-                     mFileState :: Maybe FileState <- (getFileState conn ctx)
-                     (case (mFileState, fileStatus) of
-                        (Nothing, Left _) -> return () -- didn't find the file but didn't have a record of it either. We could store a "deleted" record but why bother.
-                        (Nothing, Right stat)
-                          | isRegularFile stat -> foundNewFile ctx2 stat
-                        (Just fileState, Left _) -> foundGoneFile ctx2 fileState
-                        (Just fileState, Right stat)
-                          | isRegularFile stat -> doCheck ctx2 fileState stat
+                     (case fileStatus of
+                        Left _ -> insertGoneFileState ctx2
+                        Right stat
+                          | isRegularFile stat -> maybeCheck ctx2 stat
                         _ ->
                           err
                             (repr
@@ -332,7 +260,7 @@ checkFile ctx =
 ingestPath ctx dirpath =
   let checks conn = do
         fp <- (lstree dirpath)
-        liftIO (checkFile (AbsPath fp &: conn &: ctx))
+        liftIO (checkFile (AbsPath fp &: conn &: Ingested &: ctx))
   in SQ.withConnection (nget DBPath ctx) (\conn -> (sh (checks conn)))
 
 defaultCtx =
