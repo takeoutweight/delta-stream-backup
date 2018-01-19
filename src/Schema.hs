@@ -287,10 +287,10 @@ unFileState fs =
   RelativePathText (_relative_path fs) &:
   Filename (_filename fs) &:
   -- Provenance
-  (case ((_provenance_type fs), undefined) {-(_provenance_id fs)-}
+  (case ((_provenance_type fs), (_provenance_id fs))
          of
-     (0, Just pid) -> Mirrored pid
-     (1, Nothing) -> Ingested
+     (0, FileStateId (Just (Auto (Just pid)))) -> Mirrored pid
+     (1, FileStateId Nothing) -> Ingested
      _ ->
        CE.throw
          (BadDBEncodingException
@@ -370,7 +370,8 @@ getActualFileState ctx =
      (runSelectReturningOne
         (select
            (do fileState <- all_ (_file_state fileDB)
-               guard_ ((_actual fileState) ==. val_ 1)
+               guard_ (((_actual fileState) ==. val_ 1) &&.
+                       ((_absolute_path fileState) ==. val_ (nget AbsPathText ctx)))
                pure fileState)))) &
   fmap (fmap unFileState)
 
@@ -409,8 +410,8 @@ createFileStateSequenceCounterTable =
 
 nextSequenceNumber :: (Has SQ.Connection rs, Has Remote rs) => Record rs -> IO Int
 nextSequenceNumber ctx =
-  DB.withSavepoint2
-    (fget ctx)
+--  DB.withSavepoint2
+--    (fget ctx)
     (do r <-
           SQ.query
             (fget ctx)
@@ -440,3 +441,13 @@ instance Database FileDB
 
 fileDB :: DatabaseSettings be FileDB
 fileDB = defaultDbSettings
+
+createDB filename =
+  SQ.withConnection
+    filename
+    (\conn ->
+       DB.withSavepoint
+         conn
+         (do (SQ.execute_ conn createFileStateSequenceCounterTable)
+             (SQ.execute_ conn createFileStateTable)))
+

@@ -247,6 +247,8 @@ ingestPath ctx dirpath =
         liftIO (checkFile (AbsPath fp &: conn &: Ingested &: ctx))
   in SQ.withConnection (nget DBPath ctx) (\conn -> (sh (checks conn)))
 
+defaultDBFile = "/Users/nathan/src/haskell/backup/resources/archive.sqlite"
+
 defaultCtx =
   (  DBPath defaultDBFile
   &: Archive "archie"
@@ -257,23 +259,10 @@ defaultCtx =
   &: Nil
   )
 
--- ingestPath defaultCtx "/Users/nathan/Pictures/2013/2013-05-15/"
-
 -- | uses the first filename as the filename of the target.
 cpToDir :: MonadIO io => FilePath -> FilePath -> io ()
 cpToDir from toDir = cp from (toDir </> (filename from))
 
-defaultDBFile = "/Users/nathan/src/haskell/backup/resources/archive.sqlite"
-
-createDB filename =
-  SQ.withConnection
-    filename
-    (\conn ->
-       (Catch.onException
-          (do (SQ.execute_ conn "SAVEPOINT createDB")
---               (SQ.execute_ conn createShaCheckTable)
---               (SQ.execute_ conn createFileGoneCheckTable)
---               (SQ.execute_ conn createFileInfoTable)
-              (SQ.execute_ conn "RELEASE createDB"))
-          (do (SQ.execute_ conn "ROLLBACK TO createDB")
-              (SQ.execute_ conn "RELEASE createDB"))))
+-- rm (fromString (nget DBPath defaultCtx))
+-- createDB (nget DBPath defaultCtx)
+-- ingestPath defaultCtx "/Users/nathan/Pictures/2013/2013-05-15/"
