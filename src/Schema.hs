@@ -228,8 +228,9 @@ insertGoneFileState ctx =
             insert
           Nothing -> return () -- no need for a gone entry for a file that was never seen.
 
--- | Inserts as Actual, disabling any previous state's Actuality if its not
--- already known to be gone
+{- | Inserts as Actual, disabling any previous state's Actuality if its not
+     already known to be gone
+-}
 insertDetailedFileState ::
      ( Has SQ.Connection rs
      , Has StatTime rs

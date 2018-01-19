@@ -144,22 +144,6 @@ ensureTrailingSlash fp = fp FP.</> ""
 defaultRechecksum :: UTCTime -> UTCTime -> Bool
 defaultRechecksum now prev = False
 
-{- | This is attempting the nested approach to extensible record-esque things
--}
-checkFile3 :: (MonadIO io, Has SQ.Connection r) => Record r -> io (Record (Int : r))-- (Maybe ShaCheck)
-checkFile3 r = do
-  liftIO (SQ.close (fget r))
-  return (r & fcons 3)
-
--- FIXME: Feel like this should work? Maybe `get` only works on concrete Records?
--- :t (fmap (\r -> ((get r) :: Int)) (checkFile3 undefined))
--- this is OK (fmap get ([(3 &: Nil)] :: [Record '[Int]])) :: [Int]
--- but this works: :t (\r -> ((get r) :: Int)) . (\r -> r & fcons (3 :: Int)) So maybe just something with the monad?
-
--- TODO supercede previous state
--- TODO Re-order and possibly synomize all these constraints
--- | We have a previous state for a path. If we're due for a recheck, calculate
--- the sha and add an entry to the db.
 maybeCheck ::
      ( Has AbsPath rs
      , Has Filename rs
