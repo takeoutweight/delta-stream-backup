@@ -53,6 +53,9 @@ fcons e rs = (VF.Identity e) :& rs
 fappend :: Record as -> Record bs -> Record (as VT.++ bs)
 fappend = rappend
 
+fcast :: RSubset rs ss (VT.RImage rs ss) => Record ss -> Record rs
+fcast = rcast
+
 (&:) :: r -> Record rs -> Record (r : rs)
 e &: rs = fcons e rs
 infixr 5 &:
@@ -93,13 +96,13 @@ instance Wrapped Rechecksum
 newtype StatTime = StatTime UTCTime deriving (Show, Generic)
 instance Wrapped StatTime
 
-newtype ModTime = ModTime UTCTime deriving (Show, Generic)
+newtype ModTime = ModTime UTCTime deriving (Show, Generic, Eq)
 instance Wrapped ModTime
 
-newtype FileSize = FileSize Int deriving (Show, Generic)
+newtype FileSize = FileSize Int deriving (Show, Generic, Eq)
 instance Wrapped FileSize
 
-newtype Checksum = Checksum Text deriving (Show, Generic)
+newtype Checksum = Checksum Text deriving (Show, Generic, Eq)
 instance Wrapped Checksum
 
 newtype FileInfoIdText = FileInfoIdText Text deriving (Show, Generic)
@@ -112,9 +115,9 @@ newtype Deleted = Deleted Bool deriving (Show, Generic)
 instance Wrapped Deleted
 
 -- Where the text is the key id used. This is only if the SYSTEM is handling the encryption. It won't detect files that happen to be encrypted on their own.
-data IsEncrypted = Encrypted Text | Unencrypted deriving (Show, Generic)
+data IsEncrypted = Encrypted Text | Unencrypted deriving (Show, Generic, Eq)
 
-newtype FileStateIdF = FileStateIdF Int deriving (Show, Generic)
+newtype FileStateIdF = FileStateIdF (Maybe Int) deriving (Show, Generic)
 instance Wrapped FileStateIdF
 
 newtype SequenceNumber = SequenceNumber Int deriving (Show, Generic)
@@ -130,5 +133,5 @@ type HasFileDetails rs = (Has ModTime rs, Has FileSize rs, Has Checksum rs, Has 
 
 newtype FileDetailsR =
   FileDetailsR (Maybe (Record '[ ModTime, FileSize, Checksum, IsEncrypted]))
-  deriving (Show, Generic)
+  deriving (Show, Generic, Eq)
 instance Wrapped FileDetailsR

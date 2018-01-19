@@ -205,7 +205,6 @@ type MHas e rs = RElem e rs (VT.RIndex e rs)
 -- Lightweight to define but printing is kind of ugly w/ the "unPath" noise
 newtype ConnectionF = ConnectionF String deriving Show
 newtype PathF = PathF String deriving Show
-
 -- Weird ghci has Record as output but not the "MHas" as input. Maybe ghci doesn't collapse constraint synonyms?
 -- mget :: MHas b rs => s b -> Record rs -> b
 -- The downside is if things in there are polymorphic you won't be able to pull them out easily - you need to monomorphize.
@@ -265,3 +264,4 @@ class (RElem e rs (VT.RIndex e rs)) => Has6 e rs where
 --   get = undefined
 
 --- Q: Can we have calculated values in our records? I.e. lenses to values that aren't really there but affect other values? Thinking of eg getting the sql version of a Bool or SUM type. Annoying to have to store those directly.
+

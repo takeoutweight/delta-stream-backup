@@ -12,6 +12,7 @@
 module Schema where
 
 import qualified Control.Exception as CE
+import Control.Lens ((&))
 import qualified Control.Monad.Catch as Catch
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.DList as DL
@@ -33,11 +34,12 @@ import Database.Beam
 import Database.Beam.Sqlite
 import qualified Database.Beam as B
 import qualified Database.Beam.Sqlite.Syntax as BSS
+
 import qualified Database.SQLite.Simple as SQ
 import GHC.Generics (Generic)
 import qualified System.Random as Random
 
--- import qualified DBHelpers as DB
+import qualified DBHelpers as DB
 import Fields
 
 -- copied from Database.Beam.Sqlite.Syntax to allow UTCTime. Not sure this is
@@ -131,8 +133,9 @@ instance Beamable (PrimaryKey FileStateT)
 
 -- | Makes the file state for a not-deleted file
 mkFileState ::
-     ( Has (Maybe Int) rs -- FileStateIdF
+     ( Has FileStateIdF rs
      , Has StatTime rs
+     , Has SequenceNumber rs
      , Has Remote rs
      , Has RelativePathText rs
      , Has AbsPathText rs
@@ -146,14 +149,17 @@ mkFileState ::
   -> FileState
 mkFileState ctx =
   (FileStateT
-   { _file_state_id = Auto ((fget ctx) :: Maybe Int)
+   { _file_state_id = Auto (nget FileStateIdF ctx)
    , _remote = nget Remote ctx
-   , _sequence_number = 0 -- TODO
+   , _sequence_number = nget SequenceNumber ctx
    , _check_time = nget StatTime ctx
    , _absolute_path = nget AbsPathText ctx
    , _relative_path = nget RelativePathText ctx
    , _filename = nget Filename ctx
-   , _deleted = 0
+   , _deleted =
+       case (nget FileDetailsR ctx) of
+         Just _ -> 0
+         Nothing -> 1
    , _mod_time = fmap (nget ModTime) (nget FileDetailsR ctx)
    , _file_size = fmap (nget FileSize) (nget FileDetailsR ctx)
    , _checksum = fmap (nget Checksum) (nget FileDetailsR ctx)
@@ -186,63 +192,75 @@ mkFileState ctx =
          Ingested -> FileStateId Nothing
    })
 
-mkGoneFileState ::
-     ( Has StatTime rs
+-- | Inserts as Actual, disabling any previous state's Actuality if its not already known to be gone
+insertGoneFileState ::
+     ( Has SQ.Connection rs
+     , Has StatTime rs
      , Has Remote rs
      , Has RelativePathText rs
      , Has AbsPathText rs
      , Has Filename rs
+     , Has Provenance rs
      )
   => Record rs
-  -> FileState
-mkGoneFileState ctx =
-  (FileStateT
-   { _file_state_id = Auto Nothing
-   , _remote = nget Remote ctx
-   , _sequence_number = 0 -- TODO
-   , _check_time = nget StatTime ctx
-   , _absolute_path = nget AbsPathText ctx
-   , _relative_path = nget RelativePathText ctx
-   , _filename = nget Filename ctx
-   , _deleted = 1
-   , _mod_time = Nothing
-   , _file_size = Nothing
-   , _checksum = Nothing
-   , _encrypted = Nothing
-   , _encryption_key_id = Nothing
-   , _canonical = 0 -- TODO
-   , _actual = 0 -- TODO
-   , _provenance_type = 0 -- TODO
-   , _provenance_id = FileStateId Nothing -- TODO FileInfoId (nget FileInfoIdText ctx)
-   })
+  -> IO ()
+insertGoneFileState ctx =
+  let insert =
+        (do sequence <- nextSequenceNumber ctx
+            (insertFileState
+               (fget ctx)
+               (mkFileState
+                  (FileStateIdF Nothing &: SequenceNumber sequence &: Actual &:
+                   FileDetailsR Nothing &:
+                   NonCanonical &:
+                   ctx))))
+  in do afs <- getActualFileState ctx
+        case fmap (\fs -> (fs, (nget FileDetailsR fs))) afs of
+          -- Just bump stat time
+          Just (fs, Nothing) ->
+            updateFileState
+              (fget ctx)
+              (mkFileState (((fget ctx) :: StatTime) &: fs))
+          -- Make a new active entry
+          Just (fs, Just _) -> do
+            updateFileState (fget ctx) (mkFileState (Historical &: fs))
+            insert
+          Nothing -> insert
 
--- updateGoneFileState ::
---      ( Has StatTime rs
---      , Has Remote rs
---      , Has RelativePathText rs
---      , Has AbsPathText rs
---      , Has Filename rs
---      )
---   => Record rs
---   -> FileState
--- updateGoneFileState ctx =
---   (FileStateT
---    { _file_state_id = Auto Nothing
---    , _remote = nget Remote ctx
---    , _sequence_number = 0 -- TODO
---    , _check_time = nget StatTime ctx
---    , _absolute_path = nget AbsPathText ctx
---    , _relative_path = nget RelativePathText ctx
---    , _filename = nget Filename ctx
---    , _deleted = 1
---    , _mod_time = Nothing
---    , _file_size = Nothing
---    , _checksum = Nothing
---    , _encrypted = Nothing
---    , _encryption_key_id = Nothing
---    , _provenance_type = 0 -- TODO
---    , _provenance_id = FileStateId Nothing -- TODO FileInfoId (nget FileInfoIdText ctx)
---    })
+insertDetailedFileState ::
+     ( Has SQ.Connection rs
+     , Has StatTime rs
+     , Has Remote rs
+     , Has RelativePathText rs
+     , Has AbsPathText rs
+     , Has Filename rs
+     , Has Provenance rs
+     , HasFileDetails rs
+     )
+  => Record rs
+  -> IO ()
+insertDetailedFileState ctx =
+  let insert =
+        (do sequence <- nextSequenceNumber ctx
+            (insertFileState
+               (fget ctx)
+               (mkFileState
+                  (FileStateIdF Nothing &: SequenceNumber sequence &: Actual &:
+                   FileDetailsR (Just (fcast ctx)) &:
+                   NonCanonical &:
+                   ctx))))
+  in do afs <- getActualFileState ctx
+        case afs of
+          Just fs ->
+            case (nget FileDetailsR fs) == Just (fcast ctx) of
+              True ->
+                updateFileState
+                  (fget ctx)
+                  (mkFileState (((fget ctx) :: StatTime) &: fs))
+              False -> do
+                updateFileState (fget ctx) (mkFileState (Historical &: fs))
+                insert
+          Nothing -> insert
 
 data BadDBEncodingException = BadDBEncodingException
   { table :: !Text
@@ -252,15 +270,12 @@ data BadDBEncodingException = BadDBEncodingException
 
 instance CE.Exception BadDBEncodingException
 
-type FileStateF = Record '[ Remote, SequenceNumber, StatTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
+type FileStateF = Record '[FileStateIdF, Remote, SequenceNumber, StatTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
 
--- | Can throw BadDBEncodingException if the assumptions are violated (which shouldn't happen if we're in control of the DB)
-unFileState ::
-     FileState
-  -> FileStateF
-unFileState fs
-    -- FileStateIdF (_file_state_id fs) &: --
- =
+-- | Can throw BadDBEncodingException if the assumptions are violated (which shouldn't happen if we're in control of the unFileState ::
+unFileState :: FileState -> FileStateF
+unFileState fs =
+  FileStateIdF (unAuto (_file_state_id fs)) &: --
   Remote (_remote fs) &: --
   SequenceNumber (_sequence_number fs) &:
   StatTime (_check_time fs) &:
@@ -296,7 +311,7 @@ unFileState fs
             "file_state"
             (_file_state_id fs)
             "Bad Actual encoding")) &:
-    FileDetailsR
+  FileDetailsR
     (case ( (_deleted fs)
           , (_mod_time fs)
           , (_file_size fs)
@@ -340,24 +355,28 @@ getFileStateById conn fileStateID =
 
 -- Could probably go via archive and relative path too - these are denormalized.
 
-getFileState ::
-     (Has Remote rs, Has Archive rs, Has AbsPath rs)
-  => SQ.Connection
-  -> Record rs
-  -> IO (Maybe FileState)
-getFileState conn ctx = undefined
---   (withDatabaseDebug
---      putStrLn
---      conn
---      (runSelectReturningOne
---         (select
---            (orderBy_
+getActualFileState ::
+     (Has SQ.Connection rs, Has Remote rs, Has AbsPathText rs)
+  => Record rs
+  -> IO (Maybe FileStateF)
+getActualFileState ctx =
+  (withDatabaseDebug
+     putStrLn
+     ((fget ctx) :: SQ.Connection)
+     (runSelectReturningOne
+        (select
+           (do fileState <- all_ (_file_state fileDB)
+               guard_ ((_actual fileState) ==. val_ 1)
+               pure fileState)))) &
+  fmap (fmap unFileState)
+
+--               (orderBy_
 --               (\s -> (desc_ (_check_time s)))
 --               (do shaCheck <- all_ (_file_state fileDB)
 --                   guard_
 --                     ((_sc_file_info_id shaCheck) ==.
 --                      val_ (FileInfoId fileInfoID))
---                   return shaCheck)))))
+--                   return shaCheck))
 
 updateFileState :: SQ.Connection -> FileState -> IO ()
 updateFileState conn fileState =
@@ -375,7 +394,7 @@ insertFileState conn fileState =
 
 createFileStateSequenceCounterTable :: SQ.Query
 createFileStateSequenceCounterTable =
-  "CREATE TABLE IF NOT EXISTS file_state_sequence_counter " <>
+  "CREATE TABLE IF NOT EXISTS file_state_sequence_counters " <>
   (SC.parens
      (mconcat
         (SC.punctuate
@@ -383,6 +402,31 @@ createFileStateSequenceCounterTable =
            [ "file_state_sequence_remote TEXT PRIMARY KEY"
            , "file_state_sequence_counter INTEGER"
            ])))
+
+nextSequenceNumber :: (Has SQ.Connection rs, Has Remote rs) => Record rs -> IO Int
+nextSequenceNumber ctx =
+  DB.withSavepoint2
+    (fget ctx)
+    (do r <-
+          SQ.query
+            (fget ctx)
+            "SELECT file_state_sequence_counter FROM file_state_sequence_counters WHERE file_state_sequence_remote = ?"
+            (SQ.Only (nget Remote ctx))
+        let num =
+              case r of
+                [SQ.Only n] -> n
+                [] -> 0
+                _ ->
+                  CE.throw
+                    (BadDBEncodingException
+                       "file_state_sequence_counters"
+                       (Auto Nothing)
+                       "Too many remote entries")
+        SQ.execute
+          (fget ctx)
+          "INSERT OR REPLACE INTO file_state_sequence_counters (file_state_sequence_remote, file_state_sequence_counter) VALUES (?,?)"
+          ((nget Remote ctx), num + 1)
+        return num)
 
 data FileDB f = FileDB
   { _file_state :: f (TableEntity FileStateT)
