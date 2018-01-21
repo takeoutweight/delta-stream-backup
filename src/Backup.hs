@@ -196,7 +196,7 @@ checkFile ctx =
   let conn :: SQ.Connection = (fget ctx)
       Location loc = (fget ctx)
       AbsPath absPath = (fget ctx)
-  in case stripPrefix (ensureTrailingSlash loc) absPath of
+  in case stripPrefix (ensureTrailingSlash (fromString (T.unpack loc))) absPath of
        Nothing ->
          err
            (repr
