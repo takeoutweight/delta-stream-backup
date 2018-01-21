@@ -150,10 +150,9 @@ maybeCheck ::
      , Has StatTime rs
      , Has Rechecksum rs
      , Has SQ.Connection rs
-     , Has Remote rs
+     , Has Location rs
      , Has RelativePathText rs
      , Has AbsPathText rs
-     , Has MasterRemote rs
      , Has Provenance rs
      )
   => Record rs
@@ -185,10 +184,8 @@ maybeCheck ctx stat = do
 -}
 checkFile ::
      ( Has SQ.Connection r
-     , Has Archive r
-     , Has Remote r
-     , Has MasterRemote r
-     , Has Root r
+     , Has Server r
+     , Has Location r
      , Has AbsPath r
      , Has Rechecksum r
      , Has Provenance r
@@ -197,15 +194,14 @@ checkFile ::
   -> IO ()
 checkFile ctx =
   let conn :: SQ.Connection = (fget ctx)
-      MasterRemote masterRemote = (fget ctx)
-      Root root = (fget ctx)
+      Location loc = (fget ctx)
       AbsPath absPath = (fget ctx)
-  in case stripPrefix (ensureTrailingSlash root) absPath of
+  in case stripPrefix (ensureTrailingSlash loc) absPath of
        Nothing ->
          err
            (repr
               ("Can't determine relative Path: " ++
-               show root ++ "," ++ show absPath))
+               show loc ++ "," ++ show absPath))
        Just relative ->
          (case ( FP.toText relative
                , FP.toText absPath
@@ -237,7 +233,7 @@ checkFile ctx =
               err
                 (repr
                    ("Can't textify path: " ++
-                    show root ++ ", " ++ show absPath ++ " : " ++ show a)))
+                    show loc ++ ", " ++ show absPath ++ " : " ++ show a)))
 
 -- | Walks dirpath recursively
 ingestPath ctx dirpath =
@@ -250,10 +246,8 @@ defaultDBFile = "/Users/nathan/src/haskell/backup/resources/archive.sqlite"
 
 defaultCtx =
   (  DBPath defaultDBFile
-  &: Archive "archie"
-  &: Remote "Nates-MBP-2014"
-  &: MasterRemote True
-  &: Root "/Users/nathan/"
+  &: Server "Nates-MBP-2014"
+  &: Location "/Users/nathan/"
   &: Rechecksum defaultRechecksum
   &: Nil
   )

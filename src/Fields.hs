@@ -65,17 +65,11 @@ infixr 5 &:
 newtype DBPath = DBPath String deriving (Show, Generic)
 instance Wrapped DBPath
 
-newtype Archive = Archive Text deriving (Show, Generic)
-instance Wrapped Archive
+newtype Server = Server Text deriving (Show, Generic)
+instance Wrapped Server
 
-newtype Remote = Remote Text deriving (Show, Generic)
-instance Wrapped Remote
-
-newtype MasterRemote = MasterRemote Bool deriving (Show, Generic)
-instance Wrapped MasterRemote
-
-newtype Root = Root FilePath deriving (Show, Generic)
-instance Wrapped Root
+newtype Location = Location Text deriving (Show, Generic)
+instance Wrapped Location
 
 newtype AbsPath = AbsPath FilePath deriving (Show, Generic)
 instance Wrapped AbsPath

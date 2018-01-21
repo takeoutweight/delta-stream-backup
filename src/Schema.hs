@@ -62,7 +62,7 @@ instance HasSqlValueSyntax SqliteValueSyntax UTCTime where
 
 data FileStateT f = FileStateT
   { _file_state_id :: Columnar f (Auto Int)
-   , _remote :: Columnar f Text
+   , _location :: Columnar f Text
    , _sequence_number :: Columnar f Int
    , _check_time :: Columnar f UTCTime
    , _absolute_path :: Columnar f Text
@@ -88,7 +88,7 @@ createFileStateTable =
         (SC.punctuate
            ", "
            [ "file_state_id INTEGER PRIMARY KEY"
-           , "remote TEXT"
+           , "location TEXT"
            , "sequence_number INTEGER"
            , "check_time TEXT"
            , "absolute_path TEXT"
@@ -136,7 +136,7 @@ mkFileState ::
      ( Has FileStateIdF rs
      , Has StatTime rs
      , Has SequenceNumber rs
-     , Has Remote rs
+     , Has Location rs
      , Has RelativePathText rs
      , Has AbsPathText rs
      , Has Filename rs
@@ -150,7 +150,7 @@ mkFileState ::
 mkFileState ctx =
   (FileStateT
    { _file_state_id = Auto (nget FileStateIdF ctx)
-   , _remote = nget Remote ctx
+   , _location = nget Location ctx
    , _sequence_number = nget SequenceNumber ctx
    , _check_time = nget StatTime ctx
    , _absolute_path = nget AbsPathText ctx
@@ -197,7 +197,7 @@ mkFileState ctx =
 insertGoneFileState ::
      ( Has SQ.Connection rs
      , Has StatTime rs
-     , Has Remote rs
+     , Has Location rs
      , Has RelativePathText rs
      , Has AbsPathText rs
      , Has Filename rs
@@ -234,7 +234,7 @@ insertGoneFileState ctx =
 insertDetailedFileState ::
      ( Has SQ.Connection rs
      , Has StatTime rs
-     , Has Remote rs
+     , Has Location rs
      , Has RelativePathText rs
      , Has AbsPathText rs
      , Has Filename rs
@@ -245,14 +245,14 @@ insertDetailedFileState ::
   -> Maybe FileStateF
   -> IO ()
 insertDetailedFileState ctx prevState =
-  let insert =
+  let insert canonical =
         (do sequence <- nextSequenceNumber ctx
             (insertFileState
                (fget ctx)
                (mkFileState
                   (FileStateIdF Nothing &: SequenceNumber sequence &: Actual &:
                    FileDetailsR (Just (fcast ctx)) &:
-                   NonCanonical &:
+                   canonical &:
                    ctx))))
   in case prevState of
        Just fs ->
@@ -263,8 +263,8 @@ insertDetailedFileState ctx prevState =
                (mkFileState (((fget ctx) :: StatTime) &: fs))
            False -> do
              updateFileState (fget ctx) (mkFileState (Historical &: fs))
-             insert
-       Nothing -> insert
+             insert NonCanonical
+       Nothing -> insert Canonical
 
 data BadDBEncodingException = BadDBEncodingException
   { table :: !Text
@@ -274,13 +274,13 @@ data BadDBEncodingException = BadDBEncodingException
 
 instance CE.Exception BadDBEncodingException
 
-type FileStateF = Record '[FileStateIdF, Remote, SequenceNumber, StatTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
+type FileStateF = Record '[FileStateIdF, Location, SequenceNumber, StatTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
 
 -- | Can throw BadDBEncodingException if the assumptions are violated (which shouldn't happen if we're in control of the unFileState ::
 unFileState :: FileState -> FileStateF
 unFileState fs =
   FileStateIdF (unAuto (_file_state_id fs)) &: --
-  Remote (_remote fs) &: --
+  Location (_location fs) &: --
   SequenceNumber (_sequence_number fs) &:
   StatTime (_check_time fs) &:
   AbsPathText (_absolute_path fs) &:
@@ -360,7 +360,7 @@ getFileStateById conn fileStateID =
 -- Could probably go via archive and relative path too - these are denormalized.
 
 getActualFileState ::
-     (Has SQ.Connection rs, Has Remote rs, Has AbsPathText rs)
+     (Has SQ.Connection rs, Has Location rs, Has AbsPathText rs)
   => Record rs
   -> IO (Maybe FileStateF)
 getActualFileState ctx =
@@ -404,19 +404,19 @@ createFileStateSequenceCounterTable =
      (mconcat
         (SC.punctuate
            ", "
-           [ "file_state_sequence_remote TEXT PRIMARY KEY"
+           [ "file_state_sequence_location TEXT PRIMARY KEY"
            , "file_state_sequence_counter INTEGER"
            ])))
 
-nextSequenceNumber :: (Has SQ.Connection rs, Has Remote rs) => Record rs -> IO Int
+nextSequenceNumber :: (Has SQ.Connection rs, Has Location rs) => Record rs -> IO Int
 nextSequenceNumber ctx =
   DB.withSavepoint
     (fget ctx)
     (do r <-
           SQ.query
             (fget ctx)
-            "SELECT file_state_sequence_counter FROM file_state_sequence_counters WHERE file_state_sequence_remote = ?"
-            (SQ.Only (nget Remote ctx))
+            "SELECT file_state_sequence_counter FROM file_state_sequence_counters WHERE file_state_sequence_location = ?"
+            (SQ.Only (nget Location ctx))
         let num =
               case r of
                 [SQ.Only n] -> n
@@ -426,11 +426,11 @@ nextSequenceNumber ctx =
                     (BadDBEncodingException
                        "file_state_sequence_counters"
                        (Auto Nothing)
-                       "Too many remote entries")
+                       "Too many location entries")
         SQ.execute
           (fget ctx)
-          "INSERT OR REPLACE INTO file_state_sequence_counters (file_state_sequence_remote, file_state_sequence_counter) VALUES (?,?)"
-          ((nget Remote ctx), num + 1)
+          "INSERT OR REPLACE INTO file_state_sequence_counters (file_state_sequence_location, file_state_sequence_counter) VALUES (?,?)"
+          ((nget Location ctx), num + 1)
         return num)
 
 data FileDB f = FileDB
