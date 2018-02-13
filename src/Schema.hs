@@ -397,6 +397,15 @@ insertFileState conn fileState =
      conn
      (runInsert (insert (_file_state fileDB) (insertValues [fileState]))))
 
+data FileDB f = FileDB
+  { _file_state :: f (TableEntity FileStateT)
+  } deriving (Generic)
+
+instance Database FileDB
+
+fileDB :: DatabaseSettings be FileDB
+fileDB = defaultDbSettings
+
 createFileStateSequenceCounterTable :: SQ.Query
 createFileStateSequenceCounterTable =
   "CREATE TABLE IF NOT EXISTS file_state_sequence_counters " <>
@@ -433,14 +442,6 @@ nextSequenceNumber ctx =
           ((nget Location ctx), num + 1)
         return num)
 
-data FileDB f = FileDB
-  { _file_state :: f (TableEntity FileStateT)
-  } deriving (Generic)
-
-instance Database FileDB
-
-fileDB :: DatabaseSettings be FileDB
-fileDB = defaultDbSettings
 
 createDB filename =
   SQ.withConnection
