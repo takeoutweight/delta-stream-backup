@@ -247,7 +247,7 @@ defaultDBFile = "/Users/nathan/src/haskell/backup/resources/archive.sqlite"
 defaultCtx =
   (  DBPath defaultDBFile
   &: Server "Nates-MBP-2014"
-  &: Location "/Users/nathan/"
+  &: Location "/Users/nathan/Pictures"
   &: Rechecksum defaultRechecksum
   &: Nil
   )
