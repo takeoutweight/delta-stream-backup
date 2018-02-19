@@ -102,7 +102,7 @@ createFileStateTable =
            , "encryption_key_id TEXT"
            , "actual INTEGER"
            , "canonical INTEGER"
-           , "provenance_type INTEGER" -- MIRRRORED, INGESTED, UNEXPECTEDLY_CHANGED
+           , "provenance_type INTEGER" -- 0=MIRRRORED, 1=INGESTED, 2=UNEXPECTEDLY_CHANGED
            , "provenance_id__file_state_id INTEGER"
            ])))
 
@@ -417,6 +417,7 @@ createFileStateSequenceCounterTable =
            , "file_state_sequence_counter INTEGER"
            ])))
 
+-- | starts at 1, which is important as 0 is the "I haven't seen anything yet"
 nextSequenceNumber :: (Has SQ.Connection rs, Has Location rs) => Record rs -> IO Int
 nextSequenceNumber ctx =
   DB.withSavepoint
