@@ -443,6 +443,21 @@ nextSequenceNumber ctx =
           ((nget Location ctx), num + 1)
         return num)
 
+-- | Records successful requests
+createRequestTable :: SQ.Query
+createRequestTable =
+  "CREATE TABLE IF NOT EXISTS requests " <>
+  (SC.parens
+     (mconcat
+        (SC.punctuate
+           ", "
+           [ "request_id INTEGER PRIMARY KEY"
+           , "destination_server TEXT KEY"
+           , "destination_location TEXT"
+           , "source_server TEXT"
+           , "source_location TEXT"
+           , "source_sequence INTEGER"
+           ])))
 
 createDB filename =
   SQ.withConnection
