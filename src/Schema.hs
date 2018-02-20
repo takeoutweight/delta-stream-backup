@@ -28,8 +28,8 @@ import Database.Beam.Backend.SQL.SQL92 (HasSqlValueSyntax(..))
 import qualified Data.String.Combinators as SC
 import Database.Beam
        (Auto, Beamable, Columnar, Database, DatabaseSettings, PrimaryKey,
-        Table, TableEntity, (==.), all_, defaultDbSettings, desc_, guard_,
-        orderBy_, runSelectReturningOne, select, val_, withDatabaseDebug)
+        Table, TableEntity, (>=.), (==.), all_, defaultDbSettings, desc_, guard_,
+        orderBy_, runSelectReturningOne, runSelectReturningList, select, val_, withDatabaseDebug)
 import Database.Beam
 import Database.Beam.Sqlite
 import qualified Database.Beam as B
@@ -382,6 +382,22 @@ getActualFileState ctx =
 --                     ((_sc_file_info_id shaCheck) ==.
 --                      val_ (FileInfoId fileInfoID))
 --                   return shaCheck))
+
+getChangesSince :: (Has SequenceNumber rs,  Has SQ.Connection rs, Has Location rs) => Record rs -> IO [FileStateF]
+getChangesSince ctx =
+  (withDatabaseDebug
+     putStrLn
+     ((fget ctx) :: SQ.Connection)
+     (runSelectReturningList
+        (select
+           (do fileState <- all_ (_file_state fileDB)
+               guard_ ((_location fileState) ==. val_ (nget Location ctx))
+               guard_ ((_actual fileState) ==. val_ 1)
+               guard_
+                 ((_sequence_number fileState) >=.
+                  val_ (nget SequenceNumber ctx))
+               pure fileState)))) &
+  fmap (fmap unFileState)
 
 updateFileState :: SQ.Connection -> FileState -> IO ()
 updateFileState conn fileState =
