@@ -12,7 +12,7 @@
 module Schema where
 
 import qualified Control.Exception as CE
-import Control.Lens ((&))
+import Control.Lens ((&), op)
 import qualified Control.Monad.Catch as Catch
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.DList as DL
@@ -274,6 +274,7 @@ data BadDBEncodingException = BadDBEncodingException
 
 instance CE.Exception BadDBEncodingException
 
+-- Concrete, non-extensible version of the file state table.
 type FileStateF = Record '[FileStateIdF, Location, SequenceNumber, StatTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
 
 -- | Can throw BadDBEncodingException if the assumptions are violated (which shouldn't happen if we're in control of the unFileState ::
@@ -375,6 +376,20 @@ getActualFileState ctx =
                pure fileState)))) &
   fmap (fmap unFileState)
 
+getActualFileStateRelative ::
+     SQ.Connection -> Location -> RelativePathText -> IO (Maybe FileStateF)
+getActualFileStateRelative conn loc rel =
+  (withDatabaseDebug
+     putStrLn
+     conn
+     (runSelectReturningOne
+        (select
+           (do fileState <- all_ (_file_state fileDB)
+               guard_ (((_actual fileState) ==. val_ 1) &&.
+                       ((_relative_path fileState) ==. val_ (op RelativePathText rel)))
+               pure fileState)))) &
+  fmap (fmap unFileState)
+
 --               (orderBy_
 --               (\s -> (desc_ (_check_time s)))
 --               (do shaCheck <- all_ (_file_state fileDB)
@@ -398,6 +413,16 @@ getChangesSince ctx =
                   val_ (nget SequenceNumber ctx))
                pure fileState)))) &
   fmap (fmap unFileState)
+
+-- uncontroversial, i.e. if the file exists on target, the existing entry's provenance was the same source.
+copyFileState :: SQ.Connection -> FileStateF -> Location -> IO ()
+copyFileState conn source target = do
+  mPrevState <-
+    getActualFileStateRelative conn target ((fget source) :: RelativePathText)
+  case mPrevState of
+    Nothing -> undefined -- TODO copy over
+    Just prevState -> undefined -- TODO maybe copy over if uncontroversial
+  
 
 updateFileState :: SQ.Connection -> FileState -> IO ()
 updateFileState conn fileState =
@@ -482,5 +507,6 @@ createDB filename =
        DB.withSavepoint
          conn
          (do (SQ.execute_ conn createFileStateSequenceCounterTable)
-             (SQ.execute_ conn createFileStateTable)))
+             (SQ.execute_ conn createFileStateTable)
+             (SQ.execute_ conn createRequestTable)))
 

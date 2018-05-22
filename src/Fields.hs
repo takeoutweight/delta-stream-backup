@@ -78,6 +78,7 @@ instance Wrapped AbsPath
 newtype AbsPathText = AbsPathText Text deriving (Show, Generic)
 instance Wrapped AbsPathText
 
+-- | Relative to the root of the location
 newtype RelativePathText = RelativePathText Text deriving (Show, Generic)
 instance Wrapped RelativePathText
 
