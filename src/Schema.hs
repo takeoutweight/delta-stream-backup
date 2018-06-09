@@ -34,10 +34,11 @@ import Database.Beam
 import Database.Beam.Sqlite
 import qualified Database.Beam as B
 import qualified Database.Beam.Sqlite.Syntax as BSS
-
 import qualified Database.SQLite.Simple as SQ
 import GHC.Generics (Generic)
+import qualified Filesystem.Path.CurrentOS as FP
 import qualified System.Random as Random
+import Prelude hiding (FilePath, head)
 
 import qualified DBHelpers as DB
 import Fields
@@ -64,7 +65,7 @@ data FileStateT f = FileStateT
   { _file_state_id :: Columnar f (Auto Int)
    , _location :: Columnar f Text
    , _sequence_number :: Columnar f Int
-   , _check_time :: Columnar f UTCTime
+   , _check_time :: Columnar (Nullable f) UTCTime
    , _absolute_path :: Columnar f Text
    , _relative_path :: Columnar f Text
    , _filename :: Columnar f Text
@@ -134,7 +135,7 @@ instance Beamable (PrimaryKey FileStateT)
 -- | Makes the file state for a not-deleted file
 mkFileState ::
      ( Has FileStateIdF rs
-     , Has StatTime rs
+     , Has CheckTime rs
      , Has SequenceNumber rs
      , Has Location rs
      , Has RelativePathText rs
@@ -152,7 +153,7 @@ mkFileState ctx =
    { _file_state_id = Auto (nget FileStateIdF ctx)
    , _location = nget Location ctx
    , _sequence_number = nget SequenceNumber ctx
-   , _check_time = nget StatTime ctx
+   , _check_time = nget CheckTime ctx
    , _absolute_path = nget AbsPathText ctx
    , _relative_path = nget RelativePathText ctx
    , _filename = nget Filename ctx
@@ -196,7 +197,7 @@ mkFileState ctx =
 -- already known to be gone
 insertGoneFileState ::
      ( Has SQ.Connection rs
-     , Has StatTime rs
+     , Has CheckTime rs
      , Has Location rs
      , Has RelativePathText rs
      , Has AbsPathText rs
@@ -221,7 +222,7 @@ insertGoneFileState ctx =
           Just (fs, Nothing) ->
             updateFileState
               (fget ctx)
-              (mkFileState (((fget ctx) :: StatTime) &: fs))
+              (mkFileState (((fget ctx) :: CheckTime) &: fs))
           -- Make a new active entry
           Just (fs, Just _) -> do
             updateFileState (fget ctx) (mkFileState (Historical &: fs))
@@ -233,7 +234,7 @@ insertGoneFileState ctx =
 -}
 insertDetailedFileState ::
      ( Has SQ.Connection rs
-     , Has StatTime rs
+     , Has CheckTime rs
      , Has Location rs
      , Has RelativePathText rs
      , Has AbsPathText rs
@@ -260,7 +261,7 @@ insertDetailedFileState ctx prevState =
            True ->
              updateFileState
                (fget ctx)
-               (mkFileState (((fget ctx) :: StatTime) &: fs))
+               (mkFileState (((fget ctx) :: CheckTime) &: fs))
            False -> do
              updateFileState (fget ctx) (mkFileState (Historical &: fs))
              insert NonCanonical
@@ -274,8 +275,15 @@ data BadDBEncodingException = BadDBEncodingException
 
 instance CE.Exception BadDBEncodingException
 
+data BadFileStateException = BadFileStateException
+  { fs :: !FileStateF
+  , bfErrMsg :: !Text
+  } deriving (Show, Typeable)
+
+instance CE.Exception BadFileStateException
+
 -- Concrete, non-extensible version of the file state table.
-type FileStateF = Record '[FileStateIdF, Location, SequenceNumber, StatTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
+type FileStateF = Record '[FileStateIdF, Location, SequenceNumber, CheckTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
 
 -- | Can throw BadDBEncodingException if the assumptions are violated (which shouldn't happen if we're in control of the unFileState ::
 unFileState :: FileState -> FileStateF
@@ -283,7 +291,7 @@ unFileState fs =
   FileStateIdF (unAuto (_file_state_id fs)) &: --
   Location (_location fs) &: --
   SequenceNumber (_sequence_number fs) &:
-  StatTime (_check_time fs) &:
+  CheckTime (_check_time fs) &:
   AbsPathText (_absolute_path fs) &:
   RelativePathText (_relative_path fs) &:
   Filename (_filename fs) &:
@@ -414,15 +422,57 @@ getChangesSince ctx =
                pure fileState)))) &
   fmap (fmap unFileState)
 
+{- | FilePath seems to only treat paths with trailing slashes as "directories" but
+     eg `pwd` doesn't give a trailing slash.
+-}
+ensureTrailingSlash :: FP.FilePath -> FP.FilePath
+ensureTrailingSlash fp = fp FP.</> ""
+
+toRelative :: (Has Location r, Has AbsPath r) => Record r -> Maybe FP.FilePath
+toRelative ctx =
+  FP.stripPrefix
+    (ensureTrailingSlash (fromString (T.unpack (nget Location ctx))))
+    (nget AbsPath ctx)
+
+toAbsolute :: (Has Location r, Has RelativePathText r) => Record r -> Text
+toAbsolute ctx = (nget Location ctx) <> (nget RelativePathText ctx)
+
 -- uncontroversial, i.e. if the file exists on target, the existing entry's provenance was the same source.
+-- MUST be called to copy a FileStateF that has an id so we can track provenance.
 copyFileState :: SQ.Connection -> FileStateF -> Location -> IO ()
-copyFileState conn source target = do
-  mPrevState <-
-    getActualFileStateRelative conn target ((fget source) :: RelativePathText)
-  case mPrevState of
-    Nothing -> undefined -- TODO copy over
-    Just prevState -> undefined -- TODO maybe copy over if uncontroversial
-  
+copyFileState conn source target =
+  case fget source of
+    NonCanonical ->
+      CE.throw
+        (BadFileStateException source "Source FileState must be canonical")
+    Canonical ->
+      (do mPrevState <-
+            getActualFileStateRelative
+              conn
+              target
+              ((fget source) :: RelativePathText)
+          case mPrevState of
+            Nothing -> do
+              sequence <- nextSequenceNumber (conn &: target &: Nil)
+              let sourceId = (nget FileStateIdF source)
+              case sourceId of
+                Nothing ->
+                  CE.throw
+                    (BadFileStateException source "Source FileState needs an id")
+                Just id ->
+                  let nextState =
+                        (SequenceNumber sequence &:
+                         Mirrored id &:
+                         CheckTime Nothing &:
+                         target &:
+                         source)
+                  in (insertFileState
+                        iconn
+                        (mkFileState
+                           ((AbsPathText (toAbsolute nextState)) &: nextState)))
+            Just prevState -> undefined -- TODO maybe copy over if uncontroversial, Possibly mark existing record as historical etc.
+       )
+   
 
 updateFileState :: SQ.Connection -> FileState -> IO ()
 updateFileState conn fileState =

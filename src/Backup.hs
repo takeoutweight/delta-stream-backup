@@ -134,20 +134,14 @@ outputWithChecksum fp bs =
        (writeonly fp)
        (\h -> foldIO bs ((appendFold h) *> F.generalize shasum)))
 
-{- | FilePath seems to only treat paths with trailing slashes as "directories" but
-     eg `pwd` doesn't give a trailing slash.
--}
-ensureTrailingSlash :: FilePath -> FilePath
-ensureTrailingSlash fp = fp FP.</> ""
-
 -- | Never re-check
-defaultRechecksum :: UTCTime -> UTCTime -> Bool
+defaultRechecksum :: Maybe UTCTime -> Maybe UTCTime -> Bool
 defaultRechecksum now prev = False
 
 maybeCheck ::
      ( Has AbsPath rs
      , Has Filename rs
-     , Has StatTime rs
+     , Has CheckTime rs
      , Has Rechecksum rs
      , Has SQ.Connection rs
      , Has Location rs
@@ -175,7 +169,7 @@ maybeCheck ctx stat = do
     Nothing -> check
     Just prevState ->
       (when
-         (((nget Rechecksum ctx) (nget StatTime ctx) (nget StatTime prevState)) ||
+         (((nget Rechecksum ctx) (nget CheckTime ctx) (nget CheckTime prevState)) ||
           (Just modTime /= (fmap (nget ModTime) (nget FileDetailsR prevState))))
          check)
 
@@ -196,7 +190,7 @@ checkFile ctx =
   let conn :: SQ.Connection = (fget ctx)
       Location loc = (fget ctx)
       AbsPath absPath = (fget ctx)
-  in case stripPrefix (ensureTrailingSlash (fromString (T.unpack loc))) absPath of
+  in case toRelative ctx of
        Nothing ->
          err
            (repr
@@ -214,7 +208,7 @@ checkFile ctx =
                            (RelativePathText relText &: --
                             AbsPathText pathText &:
                             Filename nameText &:
-                            StatTime statTime &:
+                            CheckTime (Just statTime) &:
                             ctx)
                      fileStatus :: Either () FileStatus <-
                        (Catch.tryJust

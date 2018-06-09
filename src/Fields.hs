@@ -68,6 +68,7 @@ instance Wrapped DBPath
 newtype Server = Server Text deriving (Show, Generic)
 instance Wrapped Server
 
+-- | Location is the path to the root, prepending AbsPath
 newtype Location = Location Text deriving (Show, Generic)
 instance Wrapped Location
 
@@ -85,11 +86,12 @@ instance Wrapped RelativePathText
 newtype Filename = Filename Text deriving (Show, Generic)
 instance Wrapped Filename
 
-newtype Rechecksum = Rechecksum (UTCTime ->  UTCTime -> Bool) deriving (Generic)
+newtype Rechecksum = Rechecksum (Maybe UTCTime -> Maybe UTCTime -> Bool) deriving (Generic)
 instance Wrapped Rechecksum
 
-newtype StatTime = StatTime UTCTime deriving (Show, Generic)
-instance Wrapped StatTime
+-- | Null CheckTime means we know the expected hash but we've never checked
+newtype CheckTime = CheckTime (Maybe UTCTime) deriving (Show, Generic)
+instance Wrapped CheckTime
 
 newtype ModTime = ModTime UTCTime deriving (Show, Generic, Eq)
 instance Wrapped ModTime
@@ -120,8 +122,10 @@ instance Wrapped SequenceNumber
 
 data Provenance = Mirrored Int | Ingested deriving (Show, Generic)
 
+-- NonCanonical means this file/hash is not meant to be propagated. It possibly represents corrupted data.
 data Canonical = NonCanonical | Canonical deriving (Show, Generic)
 
+-- Actual means the record reflects the most current understanding of the real contents of the filesystem.
 data Actual = Historical | Actual  deriving (Show, Generic)
 
 type HasFileDetails rs = (Has ModTime rs, Has FileSize rs, Has Checksum rs, Has IsEncrypted rs)
