@@ -467,7 +467,7 @@ copyFileState conn source target =
                          target &:
                          source)
                   in (insertFileState
-                        iconn
+                        conn
                         (mkFileState
                            ((AbsPathText (toAbsolute nextState)) &: nextState)))
             Just prevState -> undefined -- TODO maybe copy over if uncontroversial, Possibly mark existing record as historical etc.
