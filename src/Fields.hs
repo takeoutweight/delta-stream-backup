@@ -111,21 +111,22 @@ instance Wrapped EventNumber
 newtype Deleted = Deleted Bool deriving (Show, Generic)
 instance Wrapped Deleted
 
--- Where the text is the key id used. This is only if the SYSTEM is handling the encryption. It won't detect files that happen to be encrypted on their own.
+-- | Where the text is the key id used. This is only if the SYSTEM is handling the encryption. It won't detect files that happen to be encrypted on their own.
 data IsEncrypted = Encrypted Text | Unencrypted deriving (Show, Generic, Eq)
 
 newtype FileStateIdF = FileStateIdF (Maybe Int) deriving (Show, Generic)
 instance Wrapped FileStateIdF
 
+-- | Each location has its own sequence counter
 newtype SequenceNumber = SequenceNumber Int deriving (Show, Generic)
 instance Wrapped SequenceNumber
 
 data Provenance = Mirrored Int | Ingested deriving (Show, Generic)
 
--- NonCanonical means this file/hash is not meant to be propagated. It possibly represents corrupted data.
+-- | NonCanonical means this file/hash is not meant to be propagated. It possibly represents corrupted data.
 data Canonical = NonCanonical | Canonical deriving (Show, Generic)
 
--- Actual means the record reflects the most current understanding of the real contents of the filesystem.
+-- | Actual means the record reflects the most current understanding of the real contents of the filesystem.
 data Actual = Historical | Actual  deriving (Show, Generic)
 
 type HasFileDetails rs = (Has ModTime rs, Has FileSize rs, Has Checksum rs, Has IsEncrypted rs)
