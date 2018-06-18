@@ -282,6 +282,13 @@ data BadFileStateException = BadFileStateException
 
 instance CE.Exception BadFileStateException
 
+data FSNotFoundException = FSNotFoundException
+  { fnfid :: !Int
+  , fnfErrMsg :: !Text
+  } deriving (Show, Typeable)
+
+instance CE.Exception FSNotFoundException
+
 -- Concrete, non-extensible version of the file state table.
 type FileStateF = Record '[FileStateIdF, Location, SequenceNumber, CheckTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
 
@@ -507,6 +514,24 @@ createFileStateSequenceCounterTable =
            [ "file_state_sequence_location TEXT PRIMARY KEY"
            , "file_state_sequence_counter INTEGER"
            ])))
+
+-- | Follow mirror provenance to find the original ingestion record
+-- Throws FSNotFoundException if any of the provenance pointers can't be resolved (this should not happen)
+-- FIXME: Will infinitely loop if somehow a loop has created in the db.
+getIngestionFS :: SQ.Connection -> Int -> IO FileStateF
+getIngestionFS conn fileStateID = do
+  fs <- (getFileStateById conn fileStateID)
+  (case fs of
+     Nothing ->
+       (CE.throw
+          (FSNotFoundException
+             fileStateID
+             "Can't find fileState in getIngestionVersion."))
+     Just fs ->
+       (let ufs = (unFileState fs)
+        in (case (fget ufs) of
+              Ingested -> return ufs
+              Mirrored id' -> getIngestionFS conn id')))
 
 -- | starts at 1, which is important as 0 is the "I haven't seen anything yet"
 nextSequenceNumber :: (Has SQ.Connection rs, Has Location rs) => Record rs -> IO Int
