@@ -69,7 +69,7 @@ newtype Server = Server Text deriving (Show, Generic)
 instance Wrapped Server
 
 -- | Location is the path to the root, prepending AbsPath
-newtype Location = Location Text deriving (Show, Generic)
+newtype Location = Location Text deriving (Show, Generic, Eq)
 instance Wrapped Location
 
 newtype AbsPath = AbsPath FilePath deriving (Show, Generic)

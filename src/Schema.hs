@@ -39,6 +39,7 @@ import GHC.Generics (Generic)
 import qualified Filesystem.Path.CurrentOS as FP
 import qualified System.Random as Random
 import Prelude hiding (FilePath, head)
+import qualified Turtle as Turtle
 
 import qualified DBHelpers as DB
 import Fields
@@ -448,38 +449,73 @@ toAbsolute ctx = (nget Location ctx) <> (nget RelativePathText ctx)
 -- MUST be called to copy a FileStateF that has an id so we can track provenance.
 copyFileState :: SQ.Connection -> FileStateF -> Location -> IO ()
 copyFileState conn source target =
-  case fget source of
-    NonCanonical ->
-      CE.throw
-        (BadFileStateException source "Source FileState must be canonical")
-    Canonical ->
-      (do mPrevState <-
-            getActualFileStateRelative
-              conn
-              target
-              ((fget source) :: RelativePathText)
-          case mPrevState of
-            Nothing -> do
-              sequence <- nextSequenceNumber (conn &: target &: Nil)
-              let sourceId = (nget FileStateIdF source)
-              case sourceId of
-                Nothing ->
-                  CE.throw
-                    (BadFileStateException source "Source FileState needs an id")
-                Just id ->
-                  let nextState =
-                        (SequenceNumber sequence &:
-                         Mirrored id &:
-                         CheckTime Nothing &:
-                         target &:
-                         source)
-                  in (insertFileState
-                        conn
-                        (mkFileState
-                           ((AbsPathText (toAbsolute nextState)) &: nextState)))
-            Just prevState -> undefined -- TODO maybe copy over if uncontroversial, Possibly mark existing record as historical etc.
-       )
-   
+  case (nget FileStateIdF source) of
+    Nothing ->
+      (CE.throw (BadFileStateException source "Source FileState needs an id"))
+    Just sourceId ->
+      (case fget source of
+         NonCanonical ->
+           CE.throw
+             (BadFileStateException source "Source FileState must be canonical")
+         Canonical ->
+           (do mPrevState <-
+                 (getActualFileStateRelative
+                    conn
+                    target
+                    ((fget source) :: RelativePathText))
+               case mPrevState of
+                 Nothing -> do
+                   sequence <- nextSequenceNumber (conn &: target &: Nil)
+                   (let nextState =
+                          (SequenceNumber sequence &: Mirrored sourceId &:
+                           CheckTime Nothing &:
+                           target &:
+                           source)
+                    in (insertFileState
+                          conn
+                          (mkFileState
+                             ((AbsPathText (toAbsolute nextState)) &: nextState))))
+                 -- copy over if uncontroversial, Possibly mark existing record as historical etc.
+                 -- TODO This could be cleaner if we enforced all values from a DB would DEFINITELY have an id.
+                 Just prevState ->
+                   case (nget FileStateIdF prevState) of
+                     Nothing ->
+                       (CE.throw
+                          (BadFileStateException
+                             source
+                             "A value from the db doesn't have a DB in copyFileState. This should not happen."))
+                     Just targetId ->
+                       (do sourceIn <- getIngestionFS conn targetId
+                           targetIn <- getIngestionFS conn targetId
+                           -- "Noncontroversial" or not. The source ingestion point can update its own files w/o concern.
+                           case (((fget sourceIn :: Location) ==
+                                  (fget targetIn :: Location)) &&
+                                 (nget SequenceNumber sourceIn >=
+                                  nget SequenceNumber targetIn))
+                             -- TODO properly log a warning message that we're not propagating a change?
+                                 of
+                             False ->
+                               Turtle.echo
+                                 (Turtle.repr
+                                    ("Warning: Not propagating" ++ (show source)))
+                             True -> do
+                               sequence <-
+                                 nextSequenceNumber (conn &: target &: Nil)
+                               (let nextState =
+                                      (SequenceNumber sequence &:
+                                       Mirrored sourceId &:
+                                       CheckTime Nothing &:
+                                       target &:
+                                       source)
+                                in do (updateFileState
+                                         conn
+                                         (mkFileState (Historical &: prevState)))
+                                      (insertFileState
+                                         conn
+                                         (mkFileState
+                                            ((AbsPathText (toAbsolute nextState)) &:
+                                             nextState)))))))
+
 
 updateFileState :: SQ.Connection -> FileState -> IO ()
 updateFileState conn fileState =
