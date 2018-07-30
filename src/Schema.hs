@@ -454,7 +454,7 @@ toAbsolute ctx = (nget Location ctx) <> (nget RelativePathText ctx)
 
 -- | Uncontroversial copy, i.e. if the file exists on target, the existing
 --  entry's provenance was the same source.  source FileStateF MUST have an id
---  so we can track provenance.
+--  so we can track provenance. Records an intent.
 copyFileState :: SQ.Connection -> FileStateF -> Location -> IO ()
 copyFileState conn source target =
   case (nget FileStateIdF source) of
@@ -484,7 +484,7 @@ copyFileState conn source target =
                           (mkFileState
                              ((AbsPathText (toAbsolute nextState)) &: nextState))))
                  -- copy over if uncontroversial, Possibly mark existing record as historical etc.
-                 -- TODO This could be cleaner if we enforced all values from a DB would DEFINITELY have an id.
+                 -- Q: Cleaner if we enforced all values from a DB would DEFINITELY have an id?
                  Just prevState ->
                    case (nget FileStateIdF prevState) of
                      Nothing ->
@@ -500,7 +500,7 @@ copyFileState conn source target =
                                   (fget targetIn :: Location)) &&
                                  (nget SequenceNumber sourceIn >=
                                   nget SequenceNumber targetIn))
-                             -- TODO properly log a warning message that we're not propagating a change?
+                             -- Q: properly log a warning message that we're not propagating a change?
                                  of
                              False ->
                                Turtle.echo
