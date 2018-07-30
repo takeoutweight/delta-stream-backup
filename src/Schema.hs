@@ -290,6 +290,13 @@ data FSNotFoundException = FSNotFoundException
 
 instance CE.Exception FSNotFoundException
 
+data ImpossibleDBResultException = ImpossibleDBResultException
+  { idrRable :: !Text
+  , idrErrMsg :: !Text
+  } deriving (Show, Typeable)
+
+instance CE.Exception ImpossibleDBResultException
+
 -- Concrete, non-extensible version of the file state table.
 type FileStateF = Record '[FileStateIdF, Location, SequenceNumber, CheckTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
 
@@ -445,8 +452,9 @@ toRelative ctx =
 toAbsolute :: (Has Location r, Has RelativePathText r) => Record r -> Text
 toAbsolute ctx = (nget Location ctx) <> (nget RelativePathText ctx)
 
--- uncontroversial, i.e. if the file exists on target, the existing entry's provenance was the same source.
--- MUST be called to copy a FileStateF that has an id so we can track provenance.
+-- | Uncontroversial copy, i.e. if the file exists on target, the existing
+--  entry's provenance was the same source.  source FileStateF MUST have an id
+--  so we can track provenance.
 copyFileState :: SQ.Connection -> FileStateF -> Location -> IO ()
 copyFileState conn source target =
   case (nget FileStateIdF source) of
@@ -595,6 +603,23 @@ nextSequenceNumber ctx =
           ((nget Location ctx), num + 1)
         return num)
 
+-- | 0 represents no previous squence number, since sequences start at 1.
+getLastRequestSourceSequence :: SQ.Connection -> Location -> Location -> IO Int
+getLastRequestSourceSequence conn (Location from) (Location to) = do
+  r <-
+    SQ.query
+      conn
+      "SELECT MAX(source_sequence) FROM requests WHERE active = 1 AND source_location = ? AND destination_location = ?"
+      (from, to)
+  case r of
+    [SQ.Only (Just n)] -> return n
+    [SQ.Only (Nothing)] -> return 0
+    _ ->
+      CE.throw
+        (ImpossibleDBResultException
+           "requests"
+           "Returning muliple results for MAX?")
+
 -- | Records successful requests
 createRequestTable :: SQ.Query
 createRequestTable =
@@ -609,6 +634,7 @@ createRequestTable =
            , "source_server TEXT"
            , "source_location TEXT"
            , "source_sequence INTEGER"
+           , "active INTEGER"
            ])))
 
 createDB filename =

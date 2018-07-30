@@ -236,6 +236,11 @@ ingestPath ctx dirpath =
         liftIO (checkFile (AbsPath fp &: conn &: Ingested &: ctx))
   in SQ.withConnection (nget DBPath ctx) (\conn -> (sh (checks conn)))
 
+-- | Mirrors all changes since the last mirror between from and to.  This means
+--   if we skipped a file due to a conflict, this fn won't try again.
+mirrorChangesFromLocation :: SQ.Connection -> Location -> Location -> IO ()
+mirrorChangesFromLocation conn from to = undefined
+
 defaultDBFile = "/Users/nathan/src/haskell/backup/resources/archive.sqlite"
 
 defaultCtx =
