@@ -22,6 +22,7 @@ import Data.String (fromString)
 import Data.Text (Text)
 import Data.Time.Clock (UTCTime)
 import qualified Data.Time as DT
+import qualified Data.Time.Clock as DTC
 import qualified Data.Text as T
 import Database.Beam.Sqlite.Syntax 
 import Database.Beam.Backend.SQL.SQL92 (HasSqlValueSyntax(..))
@@ -423,7 +424,7 @@ getActualFileStateRelative conn (Location loc) rel =
 --                      val_ (FileInfoId fileInfoID))
 --                   return shaCheck))
 
--- after, not including, sequenceNumber.
+-- | after, not including, sequenceNumber. Sorted by sequence number.
 getChangesSince :: SQ.Connection -> Int -> Location -> IO [FileStateF]
 getChangesSince conn sequenceNumber (Location location) =
   (withDatabaseDebug
@@ -431,13 +432,13 @@ getChangesSince conn sequenceNumber (Location location) =
      conn
      (runSelectReturningList
         (select
-           (do fileState <- all_ (_file_state fileDB)
-               guard_ ((_location fileState) ==. val_ location)
-               guard_ ((_actual fileState) ==. val_ 1)
-               guard_
-                 ((_sequence_number fileState) >.
-                  val_ sequenceNumber)
-               pure fileState)))) &
+           (orderBy_
+              (\s -> (asc_ (_sequence_number s)))
+              (do fileState <- all_ (_file_state fileDB)
+                  guard_ ((_location fileState) ==. val_ location)
+                  guard_ ((_actual fileState) ==. val_ 1)
+                  guard_ ((_sequence_number fileState) >. val_ sequenceNumber)
+                  pure fileState))))) &
   fmap (fmap unFileState)
 
 {- | FilePath seems to only treat paths with trailing slashes as "directories" but
@@ -683,7 +684,8 @@ mirrorChangesFromLocation :: SQ.Connection -> Location -> Location -> IO ()
 mirrorChangesFromLocation conn source@(Location sourceT) target@(Location targetT) =
   DB.withSavepoint
     conn
-    (do lastSeq <- getLastRequestSourceSequence conn source target
+    (do now <- DTC.getCurrentTime
+        lastSeq <- getLastRequestSourceSequence conn source target
         changes <- getChangesSince conn lastSeq source
         Turtle.echo (Turtle.repr ("changes: " ++ (show changes)))
         nextSeq <- mirrorChangesFromLocation' conn changes target lastSeq False
@@ -693,8 +695,8 @@ mirrorChangesFromLocation conn source@(Location sourceT) target@(Location target
           (sourceT, targetT)
         SQ.execute
           conn
-          "INSERT INTO requests (source_location, target_location, source_sequence, active) VALUES (?,?,?,1)"
-          (sourceT, targetT, nextSeq)
+          "INSERT INTO requests (source_location, target_location, source_sequence, check_time, active) VALUES (?,?,?,?,1)"
+          (sourceT, targetT, nextSeq, now)
         return ())
 
 -- | Records successful requests
@@ -706,11 +708,12 @@ createRequestTable =
         (SC.punctuate
            ", "
            [ "request_id INTEGER PRIMARY KEY"
-           , "target_server TEXT KEY"
-           , "target_location TEXT"
            , "source_server TEXT"
            , "source_location TEXT"
            , "source_sequence INTEGER"
+           , "target_server TEXT KEY"
+           , "target_location TEXT"
+           , "check_time TEXT"
            , "active INTEGER"
            ])))
 
