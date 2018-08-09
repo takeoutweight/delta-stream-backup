@@ -28,7 +28,7 @@ import Database.Beam.Backend.SQL.SQL92 (HasSqlValueSyntax(..))
 import qualified Data.String.Combinators as SC
 import Database.Beam
        (Auto, Beamable, Columnar, Database, DatabaseSettings, PrimaryKey,
-        Table, TableEntity, (>=.), (==.), all_, defaultDbSettings, desc_, guard_,
+        Table, TableEntity, (>.), (==.), all_, defaultDbSettings, desc_, guard_,
         orderBy_, runSelectReturningOne, runSelectReturningList, select, val_, withDatabaseDebug)
 import Database.Beam
 import Database.Beam.Sqlite
@@ -399,9 +399,10 @@ getActualFileState ctx =
                pure fileState)))) &
   fmap (fmap unFileState)
 
+-- | search by relative filename in a possibly different root Location.
 getActualFileStateRelative ::
      SQ.Connection -> Location -> RelativePathText -> IO (Maybe FileStateF)
-getActualFileStateRelative conn loc rel =
+getActualFileStateRelative conn (Location loc) rel =
   (withDatabaseDebug
      putStrLn
      conn
@@ -409,6 +410,7 @@ getActualFileStateRelative conn loc rel =
         (select
            (do fileState <- all_ (_file_state fileDB)
                guard_ (((_actual fileState) ==. val_ 1) &&.
+                       ((_location fileState) ==. val_ loc) &&.
                        ((_relative_path fileState) ==. val_ (op RelativePathText rel)))
                pure fileState)))) &
   fmap (fmap unFileState)
@@ -421,6 +423,7 @@ getActualFileStateRelative conn loc rel =
 --                      val_ (FileInfoId fileInfoID))
 --                   return shaCheck))
 
+-- after, not including, sequenceNumber.
 getChangesSince :: SQ.Connection -> Int -> Location -> IO [FileStateF]
 getChangesSince conn sequenceNumber (Location location) =
   (withDatabaseDebug
@@ -432,7 +435,7 @@ getChangesSince conn sequenceNumber (Location location) =
                guard_ ((_location fileState) ==. val_ location)
                guard_ ((_actual fileState) ==. val_ 1)
                guard_
-                 ((_sequence_number fileState) >=.
+                 ((_sequence_number fileState) >.
                   val_ sequenceNumber)
                pure fileState)))) &
   fmap (fmap unFileState)
@@ -484,7 +487,8 @@ copyFileState conn source target =
                     in do (insertFileState
                              conn
                              (mkFileState
-                                ((AbsPathText (toAbsolute nextState)) &:
+                                ((FileStateIdF Nothing) &:
+                                 (AbsPathText (toAbsolute nextState)) &:
                                  nextState)))
                           return True)
                  -- copy over if uncontroversial, Possibly mark existing record as historical etc.
@@ -497,7 +501,7 @@ copyFileState conn source target =
                              source
                              "A value from the db doesn't have a DB in copyFileState. This should not happen."))
                      Just targetId ->
-                       (do sourceIn <- getIngestionFS conn targetId
+                       (do sourceIn <- getIngestionFS conn sourceId
                            targetIn <- getIngestionFS conn targetId
                            -- "Noncontroversial" or not. The source ingestion point can update its own files w/o concern.
                            case (((fget sourceIn :: Location) ==
@@ -526,7 +530,10 @@ copyFileState conn source target =
                                             (show sourceIn) ++
                                             ", targetIn" ++ (show targetIn)))
                                       return True -- Benign. but maybe indicates an upstream pull is needed.
-                                    EQ -> return True -- Benign NOOP, already copied this exact version.
+                                    EQ -> do
+                                      Turtle.echo
+                                        (Turtle.repr ("noop " ++ (show source))) -- REMOVEME
+                                      return True -- Benign NOOP, already copied this exact version.
                                     GT -> do
                                       sequence <-
                                         nextSequenceNumber
@@ -544,7 +551,8 @@ copyFileState conn source target =
                                              (insertFileState
                                                 conn
                                                 (mkFileState
-                                                   ((AbsPathText
+                                                   ((FileStateIdF Nothing) &:
+                                                    (AbsPathText
                                                        (toAbsolute nextState)) &:
                                                     nextState)))
                                              (return True)))))
@@ -628,13 +636,15 @@ nextSequenceNumber ctx =
           ((nget Location ctx), num + 1)
         return (num + 1))
 
--- | 0 represents no previous squence number, since sequences start at 1.
+-- | 0 represents no previous squence number, since sequences start at
+-- 1. Represents the sequence number of the last successfully mirrored file
+-- state.
 getLastRequestSourceSequence :: SQ.Connection -> Location -> Location -> IO Int
 getLastRequestSourceSequence conn (Location from) (Location to) = do
   r <-
     SQ.query
       conn
-      "SELECT MAX(source_sequence) FROM requests WHERE active = 1 AND source_location = ? AND destination_location = ?" -- I think the max is redundant, since I just expect one active result, no?
+      "SELECT MAX(source_sequence) FROM requests WHERE active = 1 AND source_location = ? AND target_location = ?" -- I think the max is redundant, since I just expect one active result, no?
       (from, to)
   case r of
     [SQ.Only (Just n)] -> return n
@@ -645,22 +655,21 @@ getLastRequestSourceSequence conn (Location from) (Location to) = do
            "requests"
            "Returning muliple results for MAX?")
 
+-- | REQUIRES sources to be sorted by SequenceNumber
 mirrorChangesFromLocation' :: SQ.Connection -> [FileStateF] -> Location -> Int -> Bool -> IO Int
 mirrorChangesFromLocation' conn sources target lastSeq failed =
   case sources of
+    [] -> return lastSeq
     f:fs -> do
       res <- copyFileState conn f target
       (mirrorChangesFromLocation'
          conn
          fs
          target
-         (case failed of
-            True -> lastSeq
-            False -> (nget SequenceNumber f))
-         (case res of
-            True -> failed
-            False -> True))
-    [] -> return lastSeq
+         (case (failed, res) of
+            (False, True) -> (nget SequenceNumber f)
+            _ -> lastSeq)
+         (failed || (not res)))
 
 
 -- | copyFileState's all "uncontroversial" novelty from the source location to
@@ -676,14 +685,15 @@ mirrorChangesFromLocation conn source@(Location sourceT) target@(Location target
     conn
     (do lastSeq <- getLastRequestSourceSequence conn source target
         changes <- getChangesSince conn lastSeq source
+        Turtle.echo (Turtle.repr ("changes: " ++ (show changes)))
         nextSeq <- mirrorChangesFromLocation' conn changes target lastSeq False
         SQ.execute
           conn
-          "UPDATE requests SET active = 0 WHERE active = 1 AND source_location = ? AND destination_location = ?"
+          "UPDATE requests SET active = 0 WHERE active = 1 AND source_location = ? AND target_location = ?"
           (sourceT, targetT)
         SQ.execute
           conn
-          "INSERT INTO requests (source_location, destination_location, source_sequence, active) VALUES (?,?,?,1)"
+          "INSERT INTO requests (source_location, target_location, source_sequence, active) VALUES (?,?,?,1)"
           (sourceT, targetT, nextSeq)
         return ())
 
@@ -696,8 +706,8 @@ createRequestTable =
         (SC.punctuate
            ", "
            [ "request_id INTEGER PRIMARY KEY"
-           , "destination_server TEXT KEY"
-           , "destination_location TEXT"
+           , "target_server TEXT KEY"
+           , "target_location TEXT"
            , "source_server TEXT"
            , "source_location TEXT"
            , "source_sequence INTEGER"
