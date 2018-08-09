@@ -626,7 +626,7 @@ nextSequenceNumber ctx =
           (fget ctx)
           "INSERT OR REPLACE INTO file_state_sequence_counters (file_state_sequence_location, file_state_sequence_counter) VALUES (?,?)"
           ((nget Location ctx), num + 1)
-        return num)
+        return (num + 1))
 
 -- | 0 represents no previous squence number, since sequences start at 1.
 getLastRequestSourceSequence :: SQ.Connection -> Location -> Location -> IO Int
