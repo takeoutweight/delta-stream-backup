@@ -421,19 +421,19 @@ getActualFileStateRelative conn loc rel =
 --                      val_ (FileInfoId fileInfoID))
 --                   return shaCheck))
 
-getChangesSince :: (Has SequenceNumber rs,  Has SQ.Connection rs, Has Location rs) => Record rs -> IO [FileStateF]
-getChangesSince ctx =
+getChangesSince :: SQ.Connection -> Int -> Location -> IO [FileStateF]
+getChangesSince conn sequenceNumber (Location location) =
   (withDatabaseDebug
      putStrLn
-     ((fget ctx) :: SQ.Connection)
+     conn
      (runSelectReturningList
         (select
            (do fileState <- all_ (_file_state fileDB)
-               guard_ ((_location fileState) ==. val_ (nget Location ctx))
+               guard_ ((_location fileState) ==. val_ location)
                guard_ ((_actual fileState) ==. val_ 1)
                guard_
                  ((_sequence_number fileState) >=.
-                  val_ (nget SequenceNumber ctx))
+                  val_ sequenceNumber)
                pure fileState)))) &
   fmap (fmap unFileState)
 
@@ -454,8 +454,10 @@ toAbsolute ctx = (nget Location ctx) <> (nget RelativePathText ctx)
 
 -- | Uncontroversial copy, i.e. if the file exists on target, the existing
 --  entry's provenance was the same source.  source FileStateF MUST have an id
---  so we can track provenance. Records an intent.
-copyFileState :: SQ.Connection -> FileStateF -> Location -> IO ()
+--  so we can track provenance. Records an intent. Returns True if nothing
+--  potentially novel has not been propagated. (This means we can bump the
+--  sequence number for detecting novelty)
+copyFileState :: SQ.Connection -> FileStateF -> Location -> IO Bool
 copyFileState conn source target =
   case (nget FileStateIdF source) of
     Nothing ->
@@ -479,10 +481,12 @@ copyFileState conn source target =
                            CheckTime Nothing &:
                            target &:
                            source)
-                    in (insertFileState
-                          conn
-                          (mkFileState
-                             ((AbsPathText (toAbsolute nextState)) &: nextState))))
+                    in do (insertFileState
+                             conn
+                             (mkFileState
+                                ((AbsPathText (toAbsolute nextState)) &:
+                                 nextState)))
+                          return True)
                  -- copy over if uncontroversial, Possibly mark existing record as historical etc.
                  -- Q: Cleaner if we enforced all values from a DB would DEFINITELY have an id?
                  Just prevState ->
@@ -500,19 +504,20 @@ copyFileState conn source target =
                                   (fget targetIn :: Location)))
                              -- Q: properly log a warning message that we're not propagating a change?
                                  of
-                             False ->
+                             False -> do
                                Turtle.echo
                                  (Turtle.repr
-                                    ("Warning: Not propagating, different ingestion location " ++
+                                    ("Error: Not propagating, different ingestion location " ++
                                      (show source) ++
                                      ", sourceIn" ++
                                      (show sourceIn) ++
                                      ", targetIn" ++ (show targetIn)))
+                               return False
                              True ->
                                let sourceSeq = nget SequenceNumber sourceIn
                                    targetSeq = nget SequenceNumber targetIn
                                in case compare sourceSeq targetSeq of
-                                    LT ->
+                                    LT -> do
                                       Turtle.echo
                                         (Turtle.repr
                                            ("Warning: Not propagating, source is an earlier version than target " ++
@@ -520,7 +525,8 @@ copyFileState conn source target =
                                             ", sourceIn" ++
                                             (show sourceIn) ++
                                             ", targetIn" ++ (show targetIn)))
-                                    EQ -> return () -- Benign NOOP, already copied this exact version.
+                                      return True -- Benign. but maybe indicates an upstream pull is needed.
+                                    EQ -> return True -- Benign NOOP, already copied this exact version.
                                     GT -> do
                                       sequence <-
                                         nextSequenceNumber
@@ -540,7 +546,8 @@ copyFileState conn source target =
                                                 (mkFileState
                                                    ((AbsPathText
                                                        (toAbsolute nextState)) &:
-                                                    nextState)))))))
+                                                    nextState)))
+                                             (return True)))))
 
 
 updateFileState :: SQ.Connection -> FileState -> IO ()
@@ -627,7 +634,7 @@ getLastRequestSourceSequence conn (Location from) (Location to) = do
   r <-
     SQ.query
       conn
-      "SELECT MAX(source_sequence) FROM requests WHERE active = 1 AND source_location = ? AND destination_location = ?"
+      "SELECT MAX(source_sequence) FROM requests WHERE active = 1 AND source_location = ? AND destination_location = ?" -- I think the max is redundant, since I just expect one active result, no?
       (from, to)
   case r of
     [SQ.Only (Just n)] -> return n
@@ -638,10 +645,47 @@ getLastRequestSourceSequence conn (Location from) (Location to) = do
            "requests"
            "Returning muliple results for MAX?")
 
--- | TODO - copyFileState's all "uncontroversial" novelty from the source
--- location to the desination.
+mirrorChangesFromLocation' :: SQ.Connection -> [FileStateF] -> Location -> Int -> Bool -> IO Int
+mirrorChangesFromLocation' conn sources target lastSeq failed =
+  case sources of
+    f:fs -> do
+      res <- copyFileState conn f target
+      (mirrorChangesFromLocation'
+         conn
+         fs
+         target
+         (case failed of
+            True -> lastSeq
+            False -> (nget SequenceNumber f))
+         (case res of
+            True -> failed
+            False -> True))
+    [] -> return lastSeq
+
+
+-- | copyFileState's all "uncontroversial" novelty from the source location to
+-- the desination. It will propagate changes beyond the first
+-- failure-to-propagate-potential-novelty, but will only bump the sequence
+-- number up to just before first failure. This way, re-trying the copy after
+-- conflicts are resolved will cause all subsequent changes to be
+-- re-attempted. This should be safe because copying is idempotent.
+-- Will always add a new entry, even if nothing is copied.
 mirrorChangesFromLocation :: SQ.Connection -> Location -> Location -> IO ()
-mirrorChangesFromLocation conn (Location from) (Location to) = undefined
+mirrorChangesFromLocation conn source@(Location sourceT) target@(Location targetT) =
+  DB.withSavepoint
+    conn
+    (do lastSeq <- getLastRequestSourceSequence conn source target
+        changes <- getChangesSince conn lastSeq source
+        nextSeq <- mirrorChangesFromLocation' conn changes target lastSeq False
+        SQ.execute
+          conn
+          "UPDATE requests SET active = 0 WHERE active = 1 AND source_location = ? AND destination_location = ?"
+          (sourceT, targetT)
+        SQ.execute
+          conn
+          "INSERT INTO requests (source_location, destination_location, source_sequence, active) VALUES (?,?,?,1)"
+          (sourceT, targetT, nextSeq)
+        return ())
 
 -- | Records successful requests
 createRequestTable :: SQ.Query
