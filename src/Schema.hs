@@ -497,32 +497,50 @@ copyFileState conn source target =
                            targetIn <- getIngestionFS conn targetId
                            -- "Noncontroversial" or not. The source ingestion point can update its own files w/o concern.
                            case (((fget sourceIn :: Location) ==
-                                  (fget targetIn :: Location)) &&
-                                 (nget SequenceNumber sourceIn >=
-                                  nget SequenceNumber targetIn))
+                                  (fget targetIn :: Location)))
                              -- Q: properly log a warning message that we're not propagating a change?
                                  of
                              False ->
                                Turtle.echo
                                  (Turtle.repr
-                                    ("Warning: Not propagating" ++ (show source)))
-                             True -> do
-                               sequence <-
-                                 nextSequenceNumber (conn &: target &: Nil)
-                               (let nextState =
-                                      (SequenceNumber sequence &:
-                                       Mirrored sourceId &:
-                                       CheckTime Nothing &:
-                                       target &:
-                                       source)
-                                in do (updateFileState
-                                         conn
-                                         (mkFileState (Historical &: prevState)))
-                                      (insertFileState
-                                         conn
-                                         (mkFileState
-                                            ((AbsPathText (toAbsolute nextState)) &:
-                                             nextState)))))))
+                                    ("Warning: Not propagating, different ingestion location " ++
+                                     (show source) ++
+                                     ", sourceIn" ++
+                                     (show sourceIn) ++
+                                     ", targetIn" ++ (show targetIn)))
+                             True ->
+                               let sourceSeq = nget SequenceNumber sourceIn
+                                   targetSeq = nget SequenceNumber targetIn
+                               in case compare sourceSeq targetSeq of
+                                    LT ->
+                                      Turtle.echo
+                                        (Turtle.repr
+                                           ("Warning: Not propagating, source is an earlier version than target " ++
+                                            (show source) ++
+                                            ", sourceIn" ++
+                                            (show sourceIn) ++
+                                            ", targetIn" ++ (show targetIn)))
+                                    EQ -> return () -- Benign NOOP, already copied this exact version.
+                                    GT -> do
+                                      sequence <-
+                                        nextSequenceNumber
+                                          (conn &: target &: Nil)
+                                      (let nextState =
+                                             (SequenceNumber sequence &:
+                                              Mirrored sourceId &:
+                                              CheckTime Nothing &:
+                                              target &:
+                                              source)
+                                       in do (updateFileState
+                                                conn
+                                                (mkFileState
+                                                   (Historical &: prevState)))
+                                             (insertFileState
+                                                conn
+                                                (mkFileState
+                                                   ((AbsPathText
+                                                       (toAbsolute nextState)) &:
+                                                    nextState)))))))
 
 
 updateFileState :: SQ.Connection -> FileState -> IO ()
@@ -619,6 +637,11 @@ getLastRequestSourceSequence conn (Location from) (Location to) = do
         (ImpossibleDBResultException
            "requests"
            "Returning muliple results for MAX?")
+
+-- | TODO - copyFileState's all "uncontroversial" novelty from the source
+-- location to the desination.
+mirrorChangesFromLocation :: SQ.Connection -> Location -> Location -> IO ()
+mirrorChangesFromLocation conn (Location from) (Location to) = undefined
 
 -- | Records successful requests
 createRequestTable :: SQ.Query
