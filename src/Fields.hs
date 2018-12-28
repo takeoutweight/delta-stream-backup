@@ -65,13 +65,11 @@ infixr 5 &:
 newtype DBPath = DBPath String deriving (Show, Generic)
 instance Wrapped DBPath
 
-newtype Server = Server Text deriving (Show, Generic)
-instance Wrapped Server
-
--- | Location is the path to the root, prepending AbsPath
+-- | Location is the hostname and a path to a root, like Nathans-MacBook-Pro-2.local/Users/nathan/backup/loc1/. Prepended w/o host to RelativePath for an absolute path.
 newtype Location = Location Text deriving (Show, Generic, Eq)
 instance Wrapped Location
 
+-- | AbsPath is the entire real filesystem path (path to location root in Location + relative path from that location root).  What command line tools can use to refer to the file in a particular location. 
 newtype AbsPath = AbsPath FilePath deriving (Show, Generic)
 instance Wrapped AbsPath
 

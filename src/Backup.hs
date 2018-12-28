@@ -178,7 +178,6 @@ maybeCheck ctx stat = do
 -}
 checkFile ::
      ( Has SQ.Connection r
-     , Has Server r
      , Has Location r
      , Has AbsPath r
      , Has Rechecksum r
@@ -240,8 +239,7 @@ defaultDBFile = "/Users/nathan/src/haskell/backup/resources/archive.sqlite"
 
 defaultCtx =
   (  DBPath defaultDBFile
-  &: Server "Nates-MBP-2014"
-  &: Location "/Users/nathan/Pictures"
+  &: Location "Nathans-MacBook-Pro-2.local/Users/nathan/Pictures"
   &: Rechecksum defaultRechecksum
   &: Nil
   )

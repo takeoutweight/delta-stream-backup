@@ -385,7 +385,7 @@ getFileStateById conn fileStateID =
 -- Could probably go via archive and relative path too - these are denormalized.
 
 getActualFileState ::
-     (Has SQ.Connection rs, Has Location rs, Has AbsPathText rs)
+     (Has SQ.Connection rs, Has AbsPathText rs)
   => Record rs
   -> IO (Maybe FileStateF)
 getActualFileState ctx =
@@ -449,12 +449,15 @@ ensureTrailingSlash fp = fp FP.</> ""
 
 toRelative :: (Has Location r, Has AbsPath r) => Record r -> Maybe FP.FilePath
 toRelative ctx =
-  FP.stripPrefix
-    (ensureTrailingSlash (fromString (T.unpack (nget Location ctx))))
-    (nget AbsPath ctx)
+  let (host, root) = (T.breakOn "/" (nget Location ctx))
+  in FP.stripPrefix
+       (ensureTrailingSlash (fromString (T.unpack root)))
+       (nget AbsPath ctx)
 
 toAbsolute :: (Has Location r, Has RelativePathText r) => Record r -> Text
-toAbsolute ctx = (nget Location ctx) <> (nget RelativePathText ctx)
+toAbsolute ctx =
+  let (host, root) = (T.breakOn "/" (nget Location ctx))
+  in root <> (nget RelativePathText ctx)
 
 -- | Uncontroversial copy, i.e. if the file exists on target, the existing
 --  entry's provenance was the same source.  source FileStateF MUST have an id
@@ -708,10 +711,8 @@ createRequestTable =
         (SC.punctuate
            ", "
            [ "request_id INTEGER PRIMARY KEY"
-           , "source_server TEXT"
            , "source_location TEXT"
            , "source_sequence INTEGER"
-           , "target_server TEXT KEY"
            , "target_location TEXT"
            , "check_time TEXT"
            , "active INTEGER"
