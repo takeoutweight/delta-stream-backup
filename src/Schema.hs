@@ -538,10 +538,10 @@ updateFileState conn ctx =
              case fget ctx of
                Mirrored _ -> 0
                Ingested -> 1
-         , _provenance_id = undefined
-             -- case fget ctx of
-             --   Mirrored i -> FileStateId (Just (Auto (Just i)))
-             --   Ingested -> FileStateId Nothing
+         , _provenance_id =
+             case fget ctx of
+               Mirrored i -> FileStateId (Just i)
+               Ingested -> FileStateId Nothing
          })
   in (runBeamSqliteDebug
         putStrLn
