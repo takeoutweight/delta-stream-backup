@@ -17,7 +17,7 @@
 #  location: "./custom-snapshot.yaml"
 
 # Can't use this because of hOpenPGP, in extra deps? (failed in extra-deps afaict)
-resolver: lts-9.4
+resolver: lts-11.22
 
 # this one has hOpenPGP in the resolver. Is it better to use newest lts and extra-deps or older resolver?
 # this one also uses an older product-profunctors for opaleye, but intero broke
@@ -43,9 +43,9 @@ resolver: lts-9.4
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - '.'
-- '/Users/nathan/src/haskell/beam/beam-core'
-- '/Users/nathan/src/haskell/beam/beam-migrate'
-- '/Users/nathan/src/haskell/beam/beam-sqlite'
+# - '/Users/nathan/src/haskell/beam/beam-core'
+# - '/Users/nathan/src/haskell/beam/beam-migrate'
+# - '/Users/nathan/src/haskell/beam/beam-sqlite'
 #- location:
 #    git: https://github.com/tathougies/beam.git
 #    commit: 3681d85b4787d468ae4ef7adeba95bdefd881036
@@ -66,7 +66,15 @@ packages:
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 # extra-deps: [hOpenPGP-2.5.5, bzlib-0.5.0.5, nettle-0.2.0]
-extra-deps: []
+# Just followed stack's suggestions. Probably mostly due to upper bounds on beam
+
+extra-deps:
+- beam-sqlite-0.3.2.3 # For UTCTime built in
+# - beam-core-0.7.2.2
+# - beam-migrate-0.3.2.1
+# - extensible-0.5
+# - containers-0.5.11.0
+# - vector-sized-1.0.4.0
 
 # Override default flag values for local packages and extra-deps
 flags: {}

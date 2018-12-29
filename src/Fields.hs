@@ -112,7 +112,7 @@ instance Wrapped Deleted
 -- | Where the text is the key id used. This is only if the SYSTEM is handling the encryption. It won't detect files that happen to be encrypted on their own.
 data IsEncrypted = Encrypted Text | Unencrypted deriving (Show, Generic, Eq)
 
-newtype FileStateIdF = FileStateIdF (Maybe Int) deriving (Show, Generic)
+newtype FileStateIdF = FileStateIdF Int  deriving (Show, Generic)
 instance Wrapped FileStateIdF
 
 -- | Each location has its own sequence counter

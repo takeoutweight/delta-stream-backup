@@ -24,13 +24,15 @@ import Data.Time.Clock (UTCTime)
 import qualified Data.Time as DT
 import qualified Data.Time.Clock as DTC
 import qualified Data.Text as T
+import Database.Beam.Sqlite (runBeamSqliteDebug)
 import Database.Beam.Sqlite.Syntax 
 import Database.Beam.Backend.SQL.SQL92 (HasSqlValueSyntax(..))
 import qualified Data.String.Combinators as SC
 import Database.Beam
-       (Auto, Beamable, Columnar, Database, DatabaseSettings, PrimaryKey,
-        Table, TableEntity, (>.), (==.), all_, defaultDbSettings, desc_, guard_,
-        orderBy_, runSelectReturningOne, runSelectReturningList, select, val_, withDatabaseDebug)
+       (Beamable, Columnar, Database, DatabaseSettings, PrimaryKey, Table,
+        TableEntity, (==.), (>.), all_, defaultDbSettings, desc_, guard_,
+        orderBy_, runSelectReturningList, runSelectReturningOne, select,
+        val_)
 import Database.Beam
 import Database.Beam.Sqlite
 import qualified Database.Beam as B
@@ -50,21 +52,21 @@ import Fields
 -- serialize the timezone. You can specify timezone in the column, but what
 -- enforces you writing the same time-zone back into the DB if you change that
 -- later? Besides - Turtle uses UTCTime so this is easier.
-emitValue :: SQ.SQLData -> BSS.SqliteSyntax
-emitValue v = SqliteSyntax (BSB.byteString "?") (DL.singleton v)
-
-instance HasSqlValueSyntax SqliteValueSyntax UTCTime where
-  sqlValueSyntax tm =
-    SqliteValueSyntax (emitValue (SQ.SQLText (fromString tmStr)))
-    where
-      tmStr =
-        DT.formatTime
-          DT.defaultTimeLocale
-          (DT.iso8601DateFormat (Just "%H:%M:%S%Q"))
-          tm
+-- myEmitValue :: SQ.SQLData -> BSS.SqliteSyntax
+-- myEmitValue v = SqliteSyntax (BSB.byteString "?") (DL.singleton v)
+-- 
+-- instance HasSqlValueSyntax SqliteValueSyntax UTCTime where
+--   sqlValueSyntax tm =
+--     SqliteValueSyntax (myEmitValue (SQ.SQLText (fromString tmStr)))
+--     where
+--       tmStr =
+--         DT.formatTime
+--           DT.defaultTimeLocale
+--           (DT.iso8601DateFormat (Just "%H:%M:%S%Q"))
+--           tm
 
 data FileStateT f = FileStateT
-  { _file_state_id :: Columnar f (Auto Int)
+  { _file_state_id :: Columnar f Int -- Auto
    , _location :: Columnar f Text
    , _sequence_number :: Columnar f Int
    , _check_time :: Columnar (Nullable f) UTCTime
@@ -90,7 +92,7 @@ createFileStateTable =
      (mconcat
         (SC.punctuate
            ", "
-           [ "file_state_id INTEGER PRIMARY KEY"
+           [ "file_state_id INTEGER AUTO_INCREMENT PRIMARY KEY"
            , "location TEXT"
            , "sequence_number INTEGER"
            , "check_time TEXT"
@@ -128,72 +130,12 @@ deriving instance Eq FileState
 instance Beamable FileStateT
 
 instance Table FileStateT where
-  data PrimaryKey FileStateT f = FileStateId (Columnar f (Auto Int))
+  data PrimaryKey FileStateT f = FileStateId (Columnar f Int)
                             deriving Generic
   primaryKey = FileStateId . _file_state_id
 
 instance Beamable (PrimaryKey FileStateT)
 
--- | Makes the file state for a not-deleted file
-mkFileState ::
-     ( Has FileStateIdF rs
-     , Has CheckTime rs
-     , Has SequenceNumber rs
-     , Has Location rs
-     , Has RelativePathText rs
-     , Has AbsPathText rs
-     , Has Filename rs
-     , Has Provenance rs
-     , Has Canonical rs
-     , Has Actual rs
-     , Has FileDetailsR rs
-     )
-  => Record rs
-  -> FileState
-mkFileState ctx =
-  (FileStateT
-   { _file_state_id = Auto (nget FileStateIdF ctx)
-   , _location = nget Location ctx
-   , _sequence_number = nget SequenceNumber ctx
-   , _check_time = nget CheckTime ctx
-   , _absolute_path = nget AbsPathText ctx
-   , _relative_path = nget RelativePathText ctx
-   , _filename = nget Filename ctx
-   , _deleted =
-       case (nget FileDetailsR ctx) of
-         Just _ -> 0
-         Nothing -> 1
-   , _mod_time = fmap (nget ModTime) (nget FileDetailsR ctx)
-   , _file_size = fmap (nget FileSize) (nget FileDetailsR ctx)
-   , _checksum = fmap (nget Checksum) (nget FileDetailsR ctx)
-   , _encrypted =
-       fmap
-         (\fd ->
-            (case fget fd of
-               Unencrypted -> 0
-               Encrypted _ -> 1))
-         (nget FileDetailsR ctx)
-   , _encryption_key_id =
-       (case fmap fget (nget FileDetailsR ctx) of
-          Just (Encrypted k) -> Just k
-          _ -> Nothing)
-   , _canonical =
-       case fget ctx of
-         NonCanonical -> 0
-         Canonical -> 1
-   , _actual =
-       case fget ctx of
-         Historical -> 0
-         Actual -> 1
-   , _provenance_type =
-       case fget ctx of
-         Mirrored _ -> 0
-         Ingested -> 1
-   , _provenance_id =
-       case fget ctx of
-         Mirrored i -> FileStateId (Just (Auto (Just i)))
-         Ingested -> FileStateId Nothing
-   })
 
 -- | Inserts as Actual, disabling any previous state's Actuality if its not
 -- already known to be gone
@@ -213,21 +155,18 @@ insertGoneFileState ctx =
         (do sequence <- nextSequenceNumber ctx
             (insertFileState
                (fget ctx)
-               (mkFileState
-                  (FileStateIdF Nothing &: SequenceNumber sequence &: Actual &:
-                   FileDetailsR Nothing &:
-                   NonCanonical &:
-                   ctx))))
+               (SequenceNumber sequence &: Actual &: FileDetailsR Nothing &:
+                NonCanonical &:
+                ctx)))
   in do afs <- getActualFileState ctx
-        case fmap (\fs -> (fs, (nget FileDetailsR fs))) afs of
+        case fmap (\fs -> (fs, (nget FileDetailsR fs))) afs
           -- Just bump stat time
+              of
           Just (fs, Nothing) ->
-            updateFileState
-              (fget ctx)
-              (mkFileState (((fget ctx) :: CheckTime) &: fs))
+            updateFileState (fget ctx) (((fget ctx) :: CheckTime) &: fs)
           -- Make a new active entry
           Just (fs, Just _) -> do
-            updateFileState (fget ctx) (mkFileState (Historical &: fs))
+            updateFileState (fget ctx) (Historical &: fs)
             insert
           Nothing -> return () -- no need for a gone entry for a file that was never seen.
 
@@ -252,26 +191,22 @@ insertDetailedFileState ctx prevState =
         (do sequence <- nextSequenceNumber ctx
             (insertFileState
                (fget ctx)
-               (mkFileState
-                  (FileStateIdF Nothing &: SequenceNumber sequence &: Actual &:
-                   FileDetailsR (Just (fcast ctx)) &:
-                   canonical &:
-                   ctx))))
+               (SequenceNumber sequence &: Actual &:
+                FileDetailsR (Just (fcast ctx)) &:
+                canonical &:
+                ctx)))
   in case prevState of
        Just fs ->
          case (nget FileDetailsR fs) == Just (fcast ctx) of
-           True ->
-             updateFileState
-               (fget ctx)
-               (mkFileState (((fget ctx) :: CheckTime) &: fs))
+           True -> updateFileState (fget ctx) (((fget ctx) :: CheckTime) &: fs)
            False -> do
-             updateFileState (fget ctx) (mkFileState (Historical &: fs))
+             updateFileState (fget ctx) (Historical &: fs)
              insert NonCanonical
        Nothing -> insert Canonical
 
 data BadDBEncodingException = BadDBEncodingException
   { table :: !Text
-  , id :: !(Auto Int)
+  , id :: !Int
   , errMsg :: !Text
   } deriving (Show, Typeable)
 
@@ -304,7 +239,7 @@ type FileStateF = Record '[FileStateIdF, Location, SequenceNumber, CheckTime, Ab
 -- | Can throw BadDBEncodingException if the assumptions are violated (which shouldn't happen if we're in control of the unFileState ::
 unFileState :: FileState -> FileStateF
 unFileState fs =
-  FileStateIdF (unAuto (_file_state_id fs)) &: --
+  FileStateIdF (_file_state_id fs) &: --
   Location (_location fs) &: --
   SequenceNumber (_sequence_number fs) &:
   CheckTime (_check_time fs) &:
@@ -314,7 +249,7 @@ unFileState fs =
   -- Provenance
   (case ((_provenance_type fs), (_provenance_id fs))
          of
-     (0, FileStateId (Just (Auto (Just pid)))) -> Mirrored pid
+     (0, FileStateId (Just pid)) -> Mirrored pid
      (1, FileStateId Nothing) -> Ingested
      _ ->
        CE.throw
@@ -373,13 +308,13 @@ unFileState fs =
 
 getFileStateById :: SQ.Connection -> Int -> IO (Maybe FileState)
 getFileStateById conn fileStateID =
-  (withDatabaseDebug
+  (runBeamSqliteDebug
      putStrLn
      conn
      (runSelectReturningOne
         (select
            (do fileState <- all_ (_file_state fileDB)
-               guard_ ((_file_state_id fileState) ==. val_ (Auto (Just fileStateID)))
+               guard_ ((_file_state_id fileState) ==. val_ fileStateID)
                pure fileState))))
 
 -- Could probably go via archive and relative path too - these are denormalized.
@@ -389,7 +324,7 @@ getActualFileState ::
   => Record rs
   -> IO (Maybe FileStateF)
 getActualFileState ctx =
-  (withDatabaseDebug
+  (runBeamSqliteDebug
      putStrLn
      ((fget ctx) :: SQ.Connection)
      (runSelectReturningOne
@@ -404,7 +339,7 @@ getActualFileState ctx =
 getActualFileStateRelative ::
      SQ.Connection -> Location -> RelativePathText -> IO (Maybe FileStateF)
 getActualFileStateRelative conn (Location loc) rel =
-  (withDatabaseDebug
+  (runBeamSqliteDebug
      putStrLn
      conn
      (runSelectReturningOne
@@ -427,7 +362,7 @@ getActualFileStateRelative conn (Location loc) rel =
 -- | after, not including, sequenceNumber. Sorted by sequence number.
 getChangesSince :: SQ.Connection -> Int -> Location -> IO [FileStateF]
 getChangesSince conn sequenceNumber (Location location) =
-  (withDatabaseDebug
+  (runBeamSqliteDebug
      putStrLn
      conn
      (runSelectReturningList
@@ -459,6 +394,7 @@ toAbsolute ctx =
   let (host, root) = (T.breakOn "/" (nget Location ctx))
   in root <> (nget RelativePathText ctx)
 
+
 -- | Uncontroversial copy, i.e. if the file exists on target, the existing
 --  entry's provenance was the same source.  source FileStateF MUST have an id
 --  so we can track provenance. Records an intent. Returns True if nothing
@@ -466,121 +402,278 @@ toAbsolute ctx =
 --  sequence number for detecting novelty)
 copyFileState :: SQ.Connection -> FileStateF -> Location -> IO Bool
 copyFileState conn source target =
-  case (nget FileStateIdF source) of
-    Nothing ->
-      (CE.throw (BadFileStateException source "Source FileState needs an id"))
-    Just sourceId ->
-      (case fget source of
-         NonCanonical ->
-           CE.throw
-             (BadFileStateException source "Source FileState must be canonical")
-         Canonical ->
-           (do mPrevState <-
-                 (getActualFileStateRelative
-                    conn
-                    target
-                    ((fget source) :: RelativePathText))
-               case mPrevState of
-                 Nothing -> do
-                   sequence <- nextSequenceNumber (conn &: target &: Nil)
-                   (let nextState =
-                          (SequenceNumber sequence &: Mirrored sourceId &:
-                           CheckTime Nothing &:
-                           target &:
-                           source)
-                    in do (insertFileState
-                             conn
-                             (mkFileState
-                                ((FileStateIdF Nothing) &:
-                                 (AbsPathText (toAbsolute nextState)) &:
-                                 nextState)))
-                          return True)
+  let sourceId = (nget FileStateIdF source)
+  in (case fget source of
+        NonCanonical ->
+          CE.throw
+            (BadFileStateException source "Source FileState must be canonical")
+        Canonical ->
+          (do mPrevState <-
+                (getActualFileStateRelative
+                   conn
+                   target
+                   ((fget source) :: RelativePathText))
+              case mPrevState of
+                Nothing -> do
+                  sequence <- nextSequenceNumber (conn &: target &: Nil)
+                  (let nextState =
+                         (SequenceNumber sequence &: Mirrored sourceId &:
+                          CheckTime Nothing &:
+                          target &:
+                          source)
+                   in do (insertFileState
+                            conn
+                            ((AbsPathText (toAbsolute nextState)) &: nextState))
+                         return True)
                  -- copy over if uncontroversial, Possibly mark existing record as historical etc.
                  -- Q: Cleaner if we enforced all values from a DB would DEFINITELY have an id?
-                 Just prevState ->
-                   case (nget FileStateIdF prevState) of
-                     Nothing ->
-                       (CE.throw
-                          (BadFileStateException
-                             source
-                             "A value from the db doesn't have a DB in copyFileState. This should not happen."))
-                     Just targetId ->
-                       (do sourceIn <- getIngestionFS conn sourceId
-                           targetIn <- getIngestionFS conn targetId
+                Just prevState ->
+                  let targetId = (nget FileStateIdF prevState)
+                  in (do sourceIn <- getIngestionFS conn sourceId
+                         targetIn <- getIngestionFS conn targetId
                            -- "Noncontroversial" or not. The source ingestion point can update its own files w/o concern.
-                           case (((fget sourceIn :: Location) ==
-                                  (fget targetIn :: Location)))
+                         case (((fget sourceIn :: Location) ==
+                                (fget targetIn :: Location)))
                              -- Q: properly log a warning message that we're not propagating a change?
-                                 of
-                             False -> do
-                               Turtle.echo
-                                 (Turtle.repr
-                                    ("Error: Not propagating, different ingestion location " ++
-                                     (show source) ++
-                                     ", sourceIn" ++
-                                     (show sourceIn) ++
-                                     ", targetIn" ++ (show targetIn)))
-                               return False
-                             True ->
-                               let sourceSeq = nget SequenceNumber sourceIn
-                                   targetSeq = nget SequenceNumber targetIn
-                               in case compare sourceSeq targetSeq of
-                                    LT -> do
-                                      Turtle.echo
-                                        (Turtle.repr
-                                           ("Warning: Not propagating, source is an earlier version than target " ++
-                                            (show source) ++
-                                            ", sourceIn" ++
-                                            (show sourceIn) ++
-                                            ", targetIn" ++ (show targetIn)))
-                                      return True -- Benign. but maybe indicates an upstream pull is needed.
-                                    EQ -> do
-                                      Turtle.echo
-                                        (Turtle.repr ("noop " ++ (show source))) -- REMOVEME
-                                      return True -- Benign NOOP, already copied this exact version.
-                                    GT -> do
-                                      sequence <-
-                                        nextSequenceNumber
-                                          (conn &: target &: Nil)
-                                      (let nextState =
-                                             (SequenceNumber sequence &:
-                                              Mirrored sourceId &:
-                                              CheckTime Nothing &:
-                                              target &:
-                                              source)
-                                       in do (updateFileState
-                                                conn
-                                                (mkFileState
-                                                   (Historical &: prevState)))
-                                             (insertFileState
-                                                conn
-                                                (mkFileState
-                                                   ((FileStateIdF Nothing) &:
-                                                    (AbsPathText
-                                                       (toAbsolute nextState)) &:
-                                                    nextState)))
-                                             (return True)))))
+                               of
+                           False -> do
+                             Turtle.echo
+                               (Turtle.repr
+                                  ("Error: Not propagating, different ingestion location " ++
+                                   (show source) ++
+                                   ", sourceIn" ++
+                                   (show sourceIn) ++
+                                   ", targetIn" ++ (show targetIn)))
+                             return False
+                           True ->
+                             let sourceSeq = nget SequenceNumber sourceIn
+                                 targetSeq = nget SequenceNumber targetIn
+                             in case compare sourceSeq targetSeq of
+                                  LT -> do
+                                    Turtle.echo
+                                      (Turtle.repr
+                                         ("Warning: Not propagating, source is an earlier version than target " ++
+                                          (show source) ++
+                                          ", sourceIn" ++
+                                          (show sourceIn) ++
+                                          ", targetIn" ++ (show targetIn)))
+                                    return True -- Benign. but maybe indicates an upstream pull is needed.
+                                  EQ -> do
+                                    Turtle.echo
+                                      (Turtle.repr ("noop " ++ (show source))) -- REMOVEME
+                                    return True -- Benign NOOP, already copied this exact version.
+                                  GT -> do
+                                    sequence <-
+                                      nextSequenceNumber (conn &: target &: Nil)
+                                    (let nextState =
+                                           (SequenceNumber sequence &:
+                                            Mirrored sourceId &:
+                                            CheckTime Nothing &:
+                                            target &:
+                                            source)
+                                     in do (updateFileState
+                                              conn
+                                              (Historical &: prevState))
+                                           (insertFileState
+                                              conn
+                                              ((AbsPathText
+                                                  (toAbsolute nextState)) &:
+                                               nextState))
+                                           (return True)))))
 
 
-updateFileState :: SQ.Connection -> FileState -> IO ()
-updateFileState conn fileState =
-    (withDatabaseDebug
-     putStrLn
-     conn
-     (runUpdate (save (_file_state fileDB) fileState)))
+updateFileState ::
+     ( Has FileStateIdF rs
+     , Has CheckTime rs
+     , Has SequenceNumber rs
+     , Has Location rs
+     , Has RelativePathText rs
+     , Has AbsPathText rs
+     , Has Filename rs
+     , Has Provenance rs
+     , Has Canonical rs
+     , Has Actual rs
+     , Has FileDetailsR rs
+     )
+  => SQ.Connection
+  -> Record rs
+  -> IO ()
+updateFileState conn ctx =
+  let fs =
+        (FileStateT
+         { _file_state_id = nget FileStateIdF ctx
+         , _location = nget Location ctx
+         , _sequence_number = nget SequenceNumber ctx
+         , _check_time = nget CheckTime ctx
+         , _absolute_path = nget AbsPathText ctx
+         , _relative_path = nget RelativePathText ctx
+         , _filename = nget Filename ctx
+         , _deleted =
+             case (nget FileDetailsR ctx) of
+               Just _ -> 0
+               Nothing -> 1
+         , _mod_time = fmap (nget ModTime) (nget FileDetailsR ctx)
+         , _file_size = fmap (nget FileSize) (nget FileDetailsR ctx)
+         , _checksum = fmap (nget Checksum) (nget FileDetailsR ctx)
+         , _encrypted =
+             fmap
+               (\fd ->
+                  (case fget fd of
+                     Unencrypted -> 0
+                     Encrypted _ -> 1))
+               (nget FileDetailsR ctx)
+         , _encryption_key_id =
+             (case fmap fget (nget FileDetailsR ctx) of
+                Just (Encrypted k) -> Just k
+                _ -> Nothing)
+         , _canonical =
+             case fget ctx of
+               NonCanonical -> 0
+               Canonical -> 1
+         , _actual =
+             case fget ctx of
+               Historical -> 0
+               Actual -> 1
+         , _provenance_type =
+             case fget ctx of
+               Mirrored _ -> 0
+               Ingested -> 1
+         , _provenance_id = undefined
+             -- case fget ctx of
+             --   Mirrored i -> FileStateId (Just (Auto (Just i)))
+             --   Ingested -> FileStateId Nothing
+         })
+  in (runBeamSqliteDebug
+        putStrLn
+        conn
+        (runUpdate (save (_file_state fileDB) fs)))
+{-
+  let fs =
+        (FileStateT
+         { _file_state_id = default_
+         , _location = val_ ((nget Location ctx) :: Text)
+         , _absolute_path = val_ (nget AbsPathText ctx)
+         , _relative_path = val_ (nget RelativePathText ctx)
+         , _filename = val_ (nget Filename ctx)
+         , _deleted =
+             case (nget FileDetailsR ctx) of
+               Just _ -> val_ 0
+               Nothing -> val_ 1
+         , _mod_time = val_ (fmap (nget ModTime) (nget FileDetailsR ctx))
+         , _file_size = val_ (fmap (nget FileSize) (nget FileDetailsR ctx))
+         , _checksum = val_ (fmap (nget Checksum) (nget FileDetailsR ctx))
+         , _encrypted =
+             val_
+               (fmap
+                  (\fd ->
+                     (case fget fd of
+                        Unencrypted -> 0
+                        Encrypted _ -> 1))
+                  (nget FileDetailsR ctx))
+         , _encryption_key_id =
+             (case fmap fget (nget FileDetailsR ctx) of
+                Just (Encrypted k) -> val_ (Just k)
+                _ -> val_ Nothing)
+         , _canonical =
+             case fget ctx of
+               NonCanonical -> val_ 0
+               Canonical -> val_ 1
+         , _actual =
+             case fget ctx of
+               Historical -> val_ 0
+               Actual -> val_ 1
+         , _provenance_type =
+             case fget ctx of
+               Mirrored _ -> val_ 0
+               Ingested -> val_ 1
+         , _provenance_id = undefined
+          --       case fget ctx of
+          --         Mirrored i -> FileStateId (Just (Just i))
+          --         Ingested -> FileStateId Nothing
+         })
+        -}
+{-
+dog =
+  (FileStateT
+   { _file_state_id = undefined
+   , _location = val_ ("Hello" :: Text)
+   , _sequence_number = undefined
+   , _check_time = undefined
+   , _absolute_path = undefined
+   , _relative_path = undefined
+   , _filename = undefined
+   , _deleted = undefined
+   , _mod_time = undefined
+   , _file_size = undefined
+   , _checksum = undefined
+   , _encrypted = undefined
+   , _encryption_key_id = undefined
+   , _canonical = undefined
+   , _actual = undefined
+   , _provenance_type = undefined
+   , _provenance_id = undefined
+   }) -}
 
-insertFileState :: SQ.Connection -> FileState -> IO ()
-insertFileState conn fileState =
-  (withDatabaseDebug
-     putStrLn
-     conn
-     (runInsert (insert (_file_state fileDB) (insertValues [fileState]))))
+-- | Insert a new file state, (with a new auto-incrementing id.)
+--   I can't figure out how to get this to work with Beam.
+insertFileState ::
+     ( Has CheckTime rs
+     , Has SequenceNumber rs
+     , Has Location rs
+     , Has RelativePathText rs
+     , Has AbsPathText rs
+     , Has Filename rs
+     , Has Provenance rs
+     , Has Canonical rs
+     , Has Actual rs
+     , Has FileDetailsR rs
+     )
+  => SQ.Connection
+  -> Record rs
+  -> IO ()
+insertFileState conn ctx =
+  SQ.execute
+    conn
+    "INSERT INTO file_state (location, sequence_number, check_time, absolute_path, relative_path, filename, deleted, mod_time, file_size, checksum, encrypted, encryption_key_id, actual, canonical, provenance_type, provenance_id__file_state_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    (( nget Location ctx
+     , nget SequenceNumber ctx
+     , nget CheckTime ctx
+     , nget AbsPathText ctx
+     , nget RelativePathText ctx
+     , nget Filename ctx
+     , case (nget FileDetailsR ctx) of
+         Just _ -> 0 :: Int
+         Nothing -> 1 :: Int
+     , fmap (nget ModTime) (nget FileDetailsR ctx)
+     , fmap (nget FileSize) (nget FileDetailsR ctx)
+     , fmap (nget Checksum) (nget FileDetailsR ctx)) SQ.:.
+     ( fmap
+         (\fd ->
+            (case fget fd of
+               Unencrypted -> 0 :: Int
+               Encrypted _ -> 1 :: Int))
+         (nget FileDetailsR ctx)
+     , (case fmap fget (nget FileDetailsR ctx) of
+          Just (Encrypted k) -> Just k
+          _ -> Nothing)
+     , case fget ctx of
+         NonCanonical -> 0 :: Int
+         Canonical -> 1 :: Int
+     , case fget ctx of
+         Historical -> 0 :: Int
+         Actual -> 1 :: Int
+     , case fget ctx of
+         Mirrored _ -> 0 :: Int
+         Ingested -> 1 :: Int
+     , case fget ctx of
+         Mirrored i -> Just i
+         Ingested -> Nothing))
 
 data FileDB f = FileDB
   { _file_state :: f (TableEntity FileStateT)
   } deriving (Generic)
 
-instance Database FileDB
+instance Database be FileDB
 
 fileDB :: DatabaseSettings be FileDB
 fileDB = defaultDbSettings
@@ -632,7 +725,7 @@ nextSequenceNumber ctx =
                   CE.throw
                     (BadDBEncodingException
                        "file_state_sequence_counters"
-                       (Auto Nothing)
+                       0
                        "Too many location entries")
         SQ.execute
           (fget ctx)

@@ -17,6 +17,8 @@ library
   hs-source-dirs:      src
   exposed-modules:     Backup
   other-modules:       DBHelpers
+                     , Fields
+                     , Schema
   build-depends:       base >= 4.7 && < 5
                      , beam-core
                      , beam-sqlite

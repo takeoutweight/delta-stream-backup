@@ -21,7 +21,7 @@ import qualified Database.Beam.Sqlite as DBS -- Doesn't like my selectOne type
                                              -- unless I import this, even
                                              -- though I don't use it explicitly
 import qualified Database.Beam.Sqlite.Syntax as DBSS
-import qualified Database.Beam.Sqlite.Types as DBST
+-- import qualified Database.Beam.Sqlite.Types as DBST
 import qualified Database.SQLite.Simple as SQ
 import qualified System.Random as Random
 
@@ -49,18 +49,18 @@ selectOne' (DBQ.SqlSelect s) =
 -- really annotate this w/o the partial type sig, which stands for
 -- Database.Beam.Query.QueryInaccessible
 
-selectExactlyOne ::
-     ( CM.MonadIO io
-     , (DBQI.ProjectibleWithPredicate DBQI.ValueContext DBSS.SqliteExpressionSyntax res)
-     , (DBQI.ProjectibleWithPredicate DBQI.AnyType DBSS.SqliteExpressionSyntax res)
-     , (DBS.FromBackendRow DBST.Sqlite a)
-     )
-  => SQ.Connection
-  -> DBQI.Q DBSS.SqliteSelectSyntax db _ res
-  -> io (SelectOne a)
-selectExactlyOne conn query =
-  (CM.liftIO
-     (DBS.withDatabaseDebug putStrLn conn (selectOne' (DBQ.select query))))
+-- selectExactlyOne ::
+--      ( CM.MonadIO io
+--      , (DBQI.ProjectibleWithPredicate DBQI.ValueContext DBSS.SqliteExpressionSyntax res)
+--      , (DBQI.ProjectibleWithPredicate DBQI.AnyType DBSS.SqliteExpressionSyntax res)
+--      , (DBS.FromBackendRow DBST.Sqlite a)
+--      )
+--   => SQ.Connection
+--   -> DBQI.Q DBSS.SqliteSelectSyntax db _ res
+--   -> io (SelectOne a)
+-- selectExactlyOne conn query =
+--   (CM.liftIO
+--      (DBS.withDatabaseDebug putStrLn conn (selectOne' (DBQ.select query))))
 
 {-
 -- Database.Beam.Sqlite.Syntax specializes IsSql92SelectTableSyntax SqliteSelectTableSyntax
@@ -81,33 +81,33 @@ all_
 
 -- FIXME this doesn't typecheck
 -- | If there are many, still returns the first one.
-selectJustOne :: ( CM.MonadIO io
-     , (DBQI.ProjectibleWithPredicate DBQI.ValueContext DBSS.SqliteExpressionSyntax res)
-     , (DBQI.ProjectibleWithPredicate DBQI.AnyType DBSS.SqliteExpressionSyntax res)
-     , (DBS.FromBackendRow DBST.Sqlite a)
-     )
-  => SQ.Connection
-  -> DBQI.Q DBSS.SqliteSelectSyntax db _ res
-  -> io (Maybe a)
+-- selectJustOne :: ( CM.MonadIO io
+--      , (DBQI.ProjectibleWithPredicate DBQI.ValueContext DBSS.SqliteExpressionSyntax res)
+--      , (DBQI.ProjectibleWithPredicate DBQI.AnyType DBSS.SqliteExpressionSyntax res)
+--      , (DBS.FromBackendRow DBST.Sqlite a)
+--      )
+--   => SQ.Connection
+--   -> DBQI.Q DBSS.SqliteSelectSyntax db _ res
+--   -> io (Maybe a)
 -- selectJustOne conn query =
 --   (CM.liftIO
 --      (DBS.withDatabaseDebug putStrLn conn (DBQ.runSelectReturningOne (DBQ.select query))))
-selectJustOne = undefined
+-- selectJustOne = undefined
 
-myAll_
-  :: (DB.Database db,
-      SQL92.IsSql92SelectSyntax select,
-      DB.Table table) =>
-     DB.DatabaseEntity be db (DB.TableEntity table)
-     -> DBQ.Q select -- DBSS.SqliteCommandSyntax 
-          db
-          s
-          (table (DBQI.QExpr
-                    (SQL92.Sql92SelectTableExpressionSyntax
-                       (SQL92.Sql92SelectSelectTableSyntax
-                         select)) -- DBSS.SqliteSelectSyntax
-                    s))
-myAll_ = DBQ.all_
+-- myAll_
+--   :: (DB.Database db,
+--       SQL92.IsSql92SelectSyntax select,
+--       DB.Table table) =>
+--      DB.DatabaseEntity be db (DB.TableEntity table)
+--      -> DBQ.Q select -- DBSS.SqliteCommandSyntax 
+--           db
+--           s
+--           (table (DBQI.QExpr
+--                     (SQL92.Sql92SelectTableExpressionSyntax
+--                        (SQL92.Sql92SelectSelectTableSyntax
+--                          select)) -- DBSS.SqliteSelectSyntax
+--                     s))
+-- myAll_ = DBQ.all_
 
 -- | Runs the action in a transaction, rolling back on any unhandled exception
 withSavepointM :: SQ.Connection -> IO a -> IO (Maybe a)
