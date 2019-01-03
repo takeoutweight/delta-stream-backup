@@ -92,7 +92,7 @@ createFileStateTable =
      (mconcat
         (SC.punctuate
            ", "
-           [ "file_state_id INTEGER AUTO_INCREMENT PRIMARY KEY"
+           [ "file_state_id INTEGER PRIMARY KEY"
            , "location TEXT"
            , "sequence_number INTEGER"
            , "check_time TEXT"
@@ -775,7 +775,7 @@ mirrorChangesFromLocation' conn sources target lastSeq failed =
 -- number up to just before first failure. This way, re-trying the copy after
 -- conflicts are resolved will cause all subsequent changes to be
 -- re-attempted. This should be safe because copying is idempotent.
--- Will always add a new entry, even if nothing is copied.
+-- Will always add a new "requests" entry, even if nothing is copied.
 mirrorChangesFromLocation :: SQ.Connection -> Location -> Location -> IO ()
 mirrorChangesFromLocation conn source@(Location sourceT) target@(Location targetT) =
   DB.withSavepoint

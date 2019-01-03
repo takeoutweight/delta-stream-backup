@@ -1,3 +1,8 @@
+-- Trying to get stacktraces (dooesn't work, tries to load unprofiled world afaict)
+-- :set -prof
+-- :set -fexternal-interpreter
+-- :set -fprof-auto
+-- :set -fprof-auto-calls
 -- I seem to have to set this manually in intero to get it to stop transitively recompiling?
 :set -fobject-code
 :set -XOverloadedStrings
