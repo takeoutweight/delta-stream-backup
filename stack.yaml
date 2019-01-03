@@ -19,6 +19,11 @@
 # Can't use this because of hOpenPGP, in extra deps? (failed in extra-deps afaict)
 resolver: lts-11.22
 
+# This doesn't work afaict (random SQLite-simple problems like MAX being undefined?)
+# build:
+#   library-profiling: true
+#   executable-profiling: true
+
 # this one has hOpenPGP in the resolver. Is it better to use newest lts and extra-deps or older resolver?
 # this one also uses an older product-profunctors for opaleye, but intero broke
 # resolver: lts-8.24

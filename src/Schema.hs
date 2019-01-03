@@ -738,6 +738,7 @@ nextSequenceNumber ctx =
 -- state.
 getLastRequestSourceSequence :: SQ.Connection -> Location -> Location -> IO Int
 getLastRequestSourceSequence conn (Location from) (Location to) = do
+  Turtle.echo (Turtle.repr ("getlastRequest " ++ (show (from, to))))
   r <-
     SQ.query
       conn
@@ -783,7 +784,7 @@ mirrorChangesFromLocation conn source@(Location sourceT) target@(Location target
     (do now <- DTC.getCurrentTime
         lastSeq <- getLastRequestSourceSequence conn source target
         changes <- getChangesSince conn lastSeq source
-        Turtle.echo (Turtle.repr ("changes: " ++ (show changes)))
+        Turtle.echo (Turtle.repr ("changes since " ++ (show source) ++ " , "  ++ (show lastSeq) ++ " : " ++ (show changes)))
         nextSeq <- mirrorChangesFromLocation' conn changes target lastSeq False
         SQ.execute
           conn
