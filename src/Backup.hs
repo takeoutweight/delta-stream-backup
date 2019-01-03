@@ -262,5 +262,5 @@ sampleRun = do
     (\conn ->
        mirrorChangesFromLocation
          conn
-         (Location "/Users/nathan/Pictures")
-         (Location "/Users/nathan/SOMEWHEREELSE/Pictures"))
+         (Location "Nathans-MacBook-Pro-2.local/Users/nathan/Pictures")
+         (Location "Nathans-MacBook-Pro-2.local/Users/nathan/SOMEWHEREELSE/Pictures"))
