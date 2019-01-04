@@ -69,7 +69,7 @@ instance Wrapped DBPath
 -- location of a particular file). It is a hostname and a path to the root, like
 -- Nathans-MacBook-Pro-2.local/Users/nathan/backup/loc1/. Prepended w/o host to
 -- RelativePath for an absolute path.
-newtype Location = Location Text deriving (Show, Generic, Eq)
+newtype Location = Location Text deriving (Show, Generic, Eq, Ord)
 instance Wrapped Location
 
 -- | AbsPath is the entire real filesystem path (path to location root in

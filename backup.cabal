@@ -28,6 +28,7 @@ library
                      , dlist
                      , exceptions
                      , extensible
+                     , extra
                      , filepath
                      , labels
                      , lens

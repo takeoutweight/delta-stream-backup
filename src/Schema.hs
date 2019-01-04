@@ -16,6 +16,7 @@ import Control.Lens ((&), op)
 import qualified Control.Monad.Catch as Catch
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.List as List
+import qualified Data.List.Extra as Extra
 import qualified Data.DList as DL
 import Data.Functor.Identity (Identity)
 import Data.Maybe as Maybe
@@ -832,8 +833,9 @@ mirrorChangesFromLocation conn source@(Location sourceT) target@(Location target
         return ())
 
 data LocalCopyCmd = LocalCopyCmd
-  { cpFrom :: AbsPathText
-  , cpTo :: AbsPathText
+  { _cpFile :: RelativePathText
+  , _cpFrom :: Location
+  , _cpTo :: Location
   } deriving (Show)
 
 -- | Returns a list of proposed copy commands. Namely, any expected file in the
@@ -866,7 +868,21 @@ effectChangesPlan conn = do
               msource <- (getFirstCanonicalProvenance conn prov_id)
               return
                 (fmap
-                   (\source -> LocalCopyCmd (fget source) (fget (unFileState target)))
+                   (\source ->
+                      case ((nget RelativePathText source) ==
+                            (nget RelativePathText (unFileState target))) of
+                        False ->
+                          CE.throw
+                            (BadDBEncodingException
+                               "file_state"
+                               (_file_state_id target)
+                               "Relative path of source and target differ. Violates assumption.")
+                        True ->
+                          LocalCopyCmd
+                          { _cpFile = (fget source)
+                          , _cpFrom = (fget source)
+                          , _cpTo = (fget (unFileState target))
+                          })
                    msource))
        fss)
   return (Maybe.catMaybes cps)
