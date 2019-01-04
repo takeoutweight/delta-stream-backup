@@ -19,6 +19,7 @@ import qualified Data.List as List
 import qualified Data.List.Extra as Extra
 import qualified Data.DList as DL
 import Data.Functor.Identity (Identity)
+import Data.Hashable as Hashable
 import Data.Maybe as Maybe
 import Data.Monoid ((<>))
 import Data.String (fromString)
@@ -842,8 +843,8 @@ data LocalCopyCmd = LocalCopyCmd
 -- db that hasn't been sha verified yet. Can propose overwrites as it doesn't
 -- check the filesystem - so trusts that the copy command used (eg rsync)
 -- doesn't execute overwrites.
-effectChangesPlan :: SQ.Connection -> IO [LocalCopyCmd]
-effectChangesPlan conn = do
+proposeCopyCmds :: SQ.Connection -> IO [LocalCopyCmd]
+proposeCopyCmds conn = do
   fss <-
     (runBeamSqliteDebug
        putStrLn
@@ -886,6 +887,8 @@ effectChangesPlan conn = do
                    msource))
        fss)
   return (Maybe.catMaybes cps)
+
+  --     (Extra.groupSortOn (\cp -> (_cpFrom cp, _cpTo cp)) )
 
 -- | Records successful requests
 createRequestTable :: SQ.Query

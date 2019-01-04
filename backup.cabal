@@ -20,9 +20,11 @@ library
                      , Fields
                      , Schema
   build-depends:       base >= 4.7 && < 5
+                     , base64-bytestring
                      , beam-core
                      , beam-sqlite
                      , beam-migrate
+                     , binary
                      , bytestring
                      , cryptonite
                      , dlist
@@ -30,6 +32,7 @@ library
                      , extensible
                      , extra
                      , filepath
+                     , hashable
                      , labels
                      , lens
                      , text
