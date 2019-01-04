@@ -15,8 +15,10 @@ import qualified Control.Exception as CE
 import Control.Lens ((&), op)
 import qualified Control.Monad.Catch as Catch
 import qualified Data.ByteString.Builder as BSB
+import qualified Data.List as List
 import qualified Data.DList as DL
 import Data.Functor.Identity (Identity)
+import Data.Maybe as Maybe
 import Data.Monoid ((<>))
 import Data.String (fromString)
 import Data.Text (Text)
@@ -689,23 +691,55 @@ createFileStateSequenceCounterTable =
            , "file_state_sequence_counter INTEGER"
            ])))
 
--- | Follow mirror provenance to find the original ingestion record
+-- | Follow mirror provenance and return as a list.
 -- Throws FSNotFoundException if any of the provenance pointers can't be resolved (this should not happen)
 -- FIXME: Will infinitely loop if somehow a loop has created in the db.
-getIngestionFS :: SQ.Connection -> Int -> IO FileStateF
-getIngestionFS conn fileStateID = do
+provenanceChain :: SQ.Connection -> Int -> IO [FileStateF]
+provenanceChain conn fileStateID = do
   fs <- (getFileStateById conn fileStateID)
   (case fs of
      Nothing ->
        (CE.throw
           (FSNotFoundException
              fileStateID
-             "Can't find fileState in getIngestionVersion."))
+             "Can't find fileState in getIngestionFS"))
      Just fs ->
        (let ufs = (unFileState fs)
         in (case (fget ufs) of
-              Ingested -> return ufs
-              Mirrored id' -> getIngestionFS conn id')))
+              Ingested -> return [ufs]
+              Mirrored id' -> do
+                rest <- (provenanceChain conn id')
+                return ([ufs] ++ rest))))
+
+-- | Follow mirror provenance to find the original ingestion record
+getIngestionFS :: SQ.Connection -> Int -> IO FileStateF
+getIngestionFS conn fileStateID = do
+  provChain <- provenanceChain conn fileStateID
+  return
+    (case (List.find
+             (\fs ->
+                case (fget fs) of
+                  Ingested -> True
+                  _ -> False)
+             provChain) of
+       Nothing ->
+         (CE.throw
+            (FSNotFoundException
+               fileStateID
+               "Can't find fileState in getIngestionFS"))
+       Just fs -> fs)
+
+-- | Follow Mirrored provenance links until we find a canonical source
+getFirstCanonicalProvenance :: SQ.Connection -> Int -> IO (Maybe FileStateF)
+getFirstCanonicalProvenance conn fileStateID = do
+  provChain <- provenanceChain conn fileStateID
+  return
+    (List.find
+       (\fs ->
+          case (fget fs) of
+            Canonical -> True
+            _ -> False)
+       provChain)
 
 -- | starts at 1, which is important as 0 is the "I haven't seen anything yet"
 nextSequenceNumber :: (Has SQ.Connection rs, Has Location rs) => Record rs -> IO Int
@@ -777,6 +811,7 @@ mirrorChangesFromLocation' conn sources target lastSeq failed =
 -- conflicts are resolved will cause all subsequent changes to be
 -- re-attempted. This should be safe because copying is idempotent.
 -- Will always add a new "requests" entry, even if nothing is copied.
+-- Does not EFFECT the changes, merely marks them as intended outcome in the db
 mirrorChangesFromLocation :: SQ.Connection -> Location -> Location -> IO ()
 mirrorChangesFromLocation conn source@(Location sourceT) target@(Location targetT) =
   DB.withSavepoint
@@ -795,6 +830,46 @@ mirrorChangesFromLocation conn source@(Location sourceT) target@(Location target
           "INSERT INTO requests (source_location, target_location, source_sequence, check_time, active) VALUES (?,?,?,?,1)"
           (sourceT, targetT, nextSeq, now)
         return ())
+
+data LocalCopyCmd = LocalCopyCmd
+  { cpFrom :: AbsPathText
+  , cpTo :: AbsPathText
+  } deriving (Show)
+
+-- | Returns a list of proposed copy commands. Namely, any expected file in the
+-- db that hasn't been sha verified yet. Can propose overwrites as it doesn't
+-- check the filesystem - so trusts that the copy command used (eg rsync)
+-- doesn't execute overwrites.
+effectChangesPlan :: SQ.Connection -> IO [LocalCopyCmd]
+effectChangesPlan conn = do
+  fss <-
+    (runBeamSqliteDebug
+       putStrLn
+       conn
+       (runSelectReturningList
+          (select
+             (do fileState <- all_ (_file_state fileDB)
+                 guard_ ((_check_time fileState) ==. val_ Nothing)
+                 guard_ ((_provenance_type fileState) ==. val_ 0)
+                 pure fileState))))
+  cps <-
+    (traverse
+       (\target ->
+          case (_provenance_id target) of
+            FileStateId Nothing ->
+              CE.throw
+                (BadDBEncodingException
+                   "file_state"
+                   (_file_state_id target)
+                   "Should have provenance id defined given our query")
+            FileStateId (Just prov_id) -> do
+              msource <- (getFirstCanonicalProvenance conn prov_id)
+              return
+                (fmap
+                   (\source -> LocalCopyCmd (fget source) (fget (unFileState target)))
+                   msource))
+       fss)
+  return (Maybe.catMaybes cps)
 
 -- | Records successful requests
 createRequestTable :: SQ.Query
