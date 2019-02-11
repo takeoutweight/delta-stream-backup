@@ -837,18 +837,23 @@ mirrorChangesFromLocation conn source@(Location sourceT) target@(Location target
           (sourceT, targetT, nextSeq, now)
         return ())
 
-data RsyncEntry = RsyncEntry
+data SharedRelativeCp = SharedRelativeCp
   { _rsFile :: RelativePathText
   , _rsFrom :: Location
   , _rsTo :: Location
   } deriving (Show)
 
-data CpEntry = CpEntry
+data AlteredRelativeCp = AlteredRelativeCp
   { _cpFrom :: AbsPathText
   , _cpTo :: AbsPathText
   } deriving (Show)
 
-data CopyEntry = CopyRsync RsyncEntry | CopyCp CpEntry
+data CopyEntry = CopySharedRelative SharedRelativeCp | CopyAlteredRelative AlteredRelativeCp
+
+
+-- | Is this expected to overwrite an existing file? If not we know we can have
+-- a "preserve existing" flag on rsynce, etc, to help us avoid clobbering data.
+updateExpected = undefined
 
 -- | Returns a list of proposed copy commands. Namely, any expected file in the
 -- db that hasn't been sha verified yet. Can propose overwrites as it doesn't
@@ -885,14 +890,14 @@ proposeCopyCmds conn = do
                       case ((nget RelativePathText source) ==
                             (nget RelativePathText (unFileState target))) of
                         False ->
-                          CopyCp
-                            (CpEntry
+                          CopyAlteredRelative
+                            (AlteredRelativeCp
                              { _cpFrom = (fget source)
                              , _cpTo = (fget (unFileState target))
                              })
                         True ->
-                          CopyRsync
-                            (RsyncEntry
+                          CopySharedRelative
+                            (SharedRelativeCp
                              { _rsFile = (fget source)
                              , _rsFrom = (fget source)
                              , _rsTo = (fget (unFileState target))
