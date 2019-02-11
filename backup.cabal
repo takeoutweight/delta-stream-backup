@@ -39,6 +39,7 @@ library
                      , foldl
                      , managed
                      , random
+                     , stringsearch
                      , time
                      , transformers
                      , turtle

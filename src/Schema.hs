@@ -14,13 +14,17 @@ module Schema where
 import qualified Control.Exception as CE
 import Control.Lens ((&), op)
 import qualified Control.Monad.Catch as Catch
+import qualified Data.Binary as Binary
+import qualified Data.ByteString.Base64 as Base64
 import qualified Data.ByteString.Builder as BSB
+import qualified Data.ByteString.Char8 as BSChar8
+import qualified Data.ByteString.Lazy as BSLazy
 import qualified Data.List as List
 import qualified Data.List.Extra as Extra
 import qualified Data.DList as DL
 import Data.Functor.Identity (Identity)
-import Data.Hashable as Hashable
-import Data.Maybe as Maybe
+import qualified Data.Hashable as Hashable
+import qualified Data.Maybe as Maybe
 import Data.Monoid ((<>))
 import Data.String (fromString)
 import Data.Text (Text)
@@ -833,17 +837,24 @@ mirrorChangesFromLocation conn source@(Location sourceT) target@(Location target
           (sourceT, targetT, nextSeq, now)
         return ())
 
-data LocalCopyCmd = LocalCopyCmd
-  { _cpFile :: RelativePathText
-  , _cpFrom :: Location
-  , _cpTo :: Location
+data RsyncEntry = RsyncEntry
+  { _rsFile :: RelativePathText
+  , _rsFrom :: Location
+  , _rsTo :: Location
   } deriving (Show)
+
+data CpEntry = CpEntry
+  { _cpFrom :: AbsPathText
+  , _cpTo :: AbsPathText
+  } deriving (Show)
+
+data CopyEntry = CopyRsync RsyncEntry | CopyCp CpEntry
 
 -- | Returns a list of proposed copy commands. Namely, any expected file in the
 -- db that hasn't been sha verified yet. Can propose overwrites as it doesn't
 -- check the filesystem - so trusts that the copy command used (eg rsync)
 -- doesn't execute overwrites.
-proposeCopyCmds :: SQ.Connection -> IO [LocalCopyCmd]
+proposeCopyCmds :: SQ.Connection -> IO [CopyEntry]
 proposeCopyCmds conn = do
   fss <-
     (runBeamSqliteDebug
@@ -854,6 +865,7 @@ proposeCopyCmds conn = do
              (do fileState <- all_ (_file_state fileDB)
                  guard_ ((_check_time fileState) ==. val_ Nothing)
                  guard_ ((_provenance_type fileState) ==. val_ 0)
+                 guard_ ((_actual fileState) ==. 1)
                  pure fileState))))
   cps <-
     (traverse
@@ -873,22 +885,35 @@ proposeCopyCmds conn = do
                       case ((nget RelativePathText source) ==
                             (nget RelativePathText (unFileState target))) of
                         False ->
-                          CE.throw
-                            (BadDBEncodingException
-                               "file_state"
-                               (_file_state_id target)
-                               "Relative path of source and target differ. Violates assumption.")
+                          CopyCp
+                            (CpEntry
+                             { _cpFrom = (fget source)
+                             , _cpTo = (fget (unFileState target))
+                             })
                         True ->
-                          LocalCopyCmd
-                          { _cpFile = (fget source)
-                          , _cpFrom = (fget source)
-                          , _cpTo = (fget (unFileState target))
-                          })
+                          CopyRsync
+                            (RsyncEntry
+                             { _rsFile = (fget source)
+                             , _rsFrom = (fget source)
+                             , _rsTo = (fget (unFileState target))
+                             }))
                    msource))
        fss)
   return (Maybe.catMaybes cps)
 
-  --     (Extra.groupSortOn (\cp -> (_cpFrom cp, _cpTo cp)) )
+--     (Extra.groupSortOn (\cp -> (_cpFrom cp, _cpTo cp)) )
+
+asciiHash :: Hashable.Hashable a => a -> BSChar8.ByteString
+asciiHash obj =
+  BSChar8.filter
+    (\c -> c /= '=')
+    (BSChar8.map
+       (\c ->
+          case c of
+            '+' -> '-'
+            '/' -> '_'
+            c -> c)
+       (Base64.encode (BSLazy.toStrict (Binary.encode (Hashable.hash obj)))))
 
 -- | Records successful requests
 createRequestTable :: SQ.Query
