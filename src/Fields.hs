@@ -78,8 +78,8 @@ instance Wrapped Location
 newtype AbsPath = AbsPath FilePath deriving (Show, Generic)
 instance Wrapped AbsPath
 
--- | Because conversion of paths to text can fail
-newtype AbsPathText = AbsPathText Text deriving (Show, Generic)
+-- | Because conversion of paths to text can fail.
+newtype AbsPathText = AbsPathText Text deriving (Show, Generic, Eq, Ord)
 instance Wrapped AbsPathText
 
 -- | Relative to the root of the location

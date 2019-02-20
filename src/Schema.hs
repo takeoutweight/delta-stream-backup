@@ -6,6 +6,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE NamedFieldPuns#-}
 -- {-# LANGUAGE TypeSynonymInstances #-}
 -- {-# LANGUAGE TypeApplications #-}
 
@@ -38,7 +39,7 @@ import Database.Beam.Backend.SQL.SQL92 (HasSqlValueSyntax(..))
 import qualified Data.String.Combinators as SC
 import Database.Beam
        (Beamable, Columnar, Database, DatabaseSettings, PrimaryKey, Table,
-        TableEntity, (==.), (>.), all_, defaultDbSettings, desc_, guard_,
+        TableEntity, (/=.), (==.), (>.), all_, defaultDbSettings, desc_, guard_,
         orderBy_, runSelectReturningList, runSelectReturningOne, select,
         val_)
 import Database.Beam
@@ -850,11 +851,32 @@ data AlteredRelativeCp = AlteredRelativeCp
 
 data CopyEntry = CopySharedRelative SharedRelativeCp | CopyAlteredRelative AlteredRelativeCp
 
+data CopySort
+  = SortSharedRelative Location
+  | SortAlteredRelativeCp AbsPathText
+  deriving (Eq, Ord)
 
--- | Is this expected to overwrite an existing file? If not we know we can have
--- a "preserve existing" flag on rsynce, etc, to help us avoid clobbering data.
-updateExpected = undefined
-
+-- | Has there ever been a file known to be at this location? (i.e. are
+-- copies/updates to this filename expected to overwrite an existing file?) If
+-- not we know we can have a "preserve existing" flag on rsynce, etc, to help us
+-- avoid clobbering data.
+fileExpected :: SQ.Connection -> AbsPathText -> IO Bool
+fileExpected conn (AbsPathText pathtext) = do
+  fss <-
+    (runBeamSqliteDebug
+       putStrLn
+       conn
+       (runSelectReturningOne
+          (select
+             (do fileState <- all_ (_file_state fileDB)
+                 guard_ ((_absolute_path fileState) ==. val_ pathtext)
+                 guard_ ((_check_time fileState) /=. val_ Nothing)
+                 pure fileState))))
+  return
+    (case fss of
+       Just a -> True
+       nothing -> False)
+             
 -- | Returns a list of proposed copy commands. Namely, any expected file in the
 -- db that hasn't been sha verified yet. Can propose overwrites as it doesn't
 -- check the filesystem - so trusts that the copy command used (eg rsync)
@@ -907,6 +929,21 @@ proposeCopyCmds conn = do
   return (Maybe.catMaybes cps)
 
 --     (Extra.groupSortOn (\cp -> (_cpFrom cp, _cpTo cp)) )
+
+-- Sorts copy commands into groups that could live together in the same rsync command
+rsyncSort :: [(CopyEntry, Bool)] -> [((CopySort, Bool), [CopyEntry])]
+rsyncSort entries =
+  (Extra.groupSort
+     (map
+        (\(ce, update) ->
+           ( ( (case ce of
+                  CopySharedRelative (SharedRelativeCp {_rsFile, _rsFrom, _rsTo}) ->
+                    SortSharedRelative _rsTo
+                  CopyAlteredRelative (AlteredRelativeCp {_cpFrom, _cpTo}) ->
+                    SortAlteredRelativeCp _cpTo)
+             , update)
+           , ce))
+        entries))
 
 asciiHash :: Hashable.Hashable a => a -> BSChar8.ByteString
 asciiHash obj =
