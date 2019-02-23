@@ -28,6 +28,7 @@ import qualified Data.Hashable as Hashable
 import qualified Data.Maybe as Maybe
 import Data.Monoid ((<>))
 import Data.String (fromString)
+import qualified Data.Text as Text
 import Data.Text (Text)
 import Data.Time.Clock (UTCTime)
 import qualified Data.Time as DT
@@ -851,6 +852,13 @@ data AlteredRelativeCp = AlteredRelativeCp
 
 data CopyEntry = CopySharedRelative SharedRelativeCp | CopyAlteredRelative AlteredRelativeCp
 
+copyEntryAbsTo :: CopyEntry -> AbsPathText
+copyEntryAbsTo ce =
+  (case ce of
+     CopySharedRelative (SharedRelativeCp {_rsFile, _rsFrom, _rsTo}) ->
+       AbsPathText (toAbsolute (_rsFile &: _rsTo &: Nil))
+     CopyAlteredRelative (AlteredRelativeCp {_cpFrom, _cpTo}) -> _cpTo)
+
 data CopySort
   = SortSharedRelative Location
   | SortAlteredRelativeCp AbsPathText
@@ -927,10 +935,11 @@ proposeCopyCmds conn = do
                    msource))
        fss)
   return (Maybe.catMaybes cps)
-
+ 
 --     (Extra.groupSortOn (\cp -> (_cpFrom cp, _cpTo cp)) )
 
 -- Sorts copy commands into groups that could live together in the same rsync command
+-- I think I should just do this explicitly and get a pair of SharedRelativeCp's and AlteredRelativeCp's.
 rsyncSort :: [(CopyEntry, Bool)] -> [((CopySort, Bool), [CopyEntry])]
 rsyncSort entries =
   (Extra.groupSort
@@ -945,7 +954,65 @@ rsyncSort entries =
            , ce))
         entries))
 
-asciiHash :: Hashable.Hashable a => a -> BSChar8.ByteString
+matchCopySharedRelative :: CopyEntry -> Maybe SharedRelativeCp
+matchCopySharedRelative ce =
+  case ce of
+    CopySharedRelative sr -> Just sr
+    _ -> Nothing
+
+matchCopyAlteredRelative :: CopyEntry -> Maybe AlteredRelativeCp
+matchCopyAlteredRelative ce =
+  case ce of
+    CopyAlteredRelative ar -> Just ar
+    _ -> Nothing
+
+groupShared :: [CopyEntry] -> [((Location, Location), [SharedRelativeCp])]
+groupShared entries =
+  entries & map matchCopySharedRelative & Maybe.catMaybes &
+  map (\sr -> ((_rsFrom sr, _rsTo sr), sr)) &
+  Extra.groupSort
+
+groupAltered :: [CopyEntry] -> [(AbsPathText, [AlteredRelativeCp])]
+groupAltered entries =
+  entries & map matchCopyAlteredRelative & Maybe.catMaybes &
+  map (\ar -> (_cpTo ar, ar)) &
+  Extra.groupSort
+
+rsyncCommands :: [(CopyEntry, Bool)] -> [[Char]]
+rsyncCommands entries =
+  let newShared = entries & (filter snd) & map fst & groupShared
+      updateShared = entries & (filter (not . snd)) & map fst & groupShared
+      newAltered = entries & (filter snd) & map fst & groupAltered
+      updateAltered = entries & (filter (not . snd)) & map fst & groupAltered
+  in (newShared &
+      map
+        (\((Location locFrom, Location locTo), srs) ->
+           let filesFrom =
+                 srs & map ((op RelativePathText) . _rsFile) & Text.unlines
+           in "rsync -arv --ignore-existing --files-from " ++
+              show (asciiHash filesFrom) ++
+              " " ++ show locFrom ++ " " ++ show locTo)) ++
+     (updateShared &
+      map
+        (\((Location locFrom, Location locTo), srs) ->
+           let filesFrom =
+                 srs & map ((op RelativePathText) . _rsFile) & Text.unlines
+           in "rsync -arv --files-from " ++
+              show (asciiHash filesFrom) ++
+              " " ++ show locFrom ++ " " ++ show locTo))
+
+proposeCopyCmdsText :: SQ.Connection -> IO [[Char]]
+proposeCopyCmdsText conn = do
+  cmds <- proposeCopyCmds conn
+  entries <-
+    cmds &
+    traverse
+      (\ce -> do
+         exp <- fileExpected conn (copyEntryAbsTo ce)
+         return (ce, exp))
+  return (rsyncCommands entries)
+
+-- asciiHash :: Hashable.Hashable a => a -> BSChar8.ByteString
 asciiHash obj =
   BSChar8.filter
     (\c -> c /= '=')

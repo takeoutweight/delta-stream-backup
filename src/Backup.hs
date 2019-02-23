@@ -265,4 +265,4 @@ sampleRun = do
          (Location "Nathans-MacBook-Pro-2.local/Users/nathan/Pictures")
          (Location
             "Nathans-MacBook-Pro-2.local/Users/nathan/SOMEWHEREELSE/Pictures"))
-  SQ.withConnection (nget DBPath defaultCtx) (\conn -> proposeCopyCmds conn)
+  SQ.withConnection (nget DBPath defaultCtx) (\conn -> proposeCopyCmdsText conn)
