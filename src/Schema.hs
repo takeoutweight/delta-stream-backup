@@ -983,31 +983,60 @@ groupAltered entries =
   map (\ar -> (_cpTo ar, ar)) &
   Extra.groupSort
 
+sharedCommand ::
+     String
+  -> ((Location, Location), [SharedRelativeCp])
+  -> (String, FP.FilePath, [Turtle.Line])
+sharedCommand flags ((Location locFrom, Location locTo), srs) =
+  let filesFrom = srs & map ((op RelativePathText) . _rsFile)
+      filesFromFilename =
+        "/tmp/files-from/" <> (BSChar8.unpack (asciiHash filesFrom))
+      linedFilesFrom =
+        filesFrom &
+        map
+          (\f ->
+             case (Turtle.textToLine f) of
+               Just l -> l
+               Nothing -> CE.throw (NewlinesInFilenameException f))
+  in ( ("rsync -arv " ++ flags ++ " --files-from " ++
+        show filesFromFilename ++
+        " " ++ T.unpack locFrom ++ " " ++ T.unpack locTo)
+     , Turtle.decodeString filesFromFilename
+     , linedFilesFrom)
+
+alteredCommand ::
+     String
+  -> (AbsPathText, [AlteredRelativeCp])
+  -> (String, FP.FilePath, [Turtle.Line])
+alteredCommand flags ((AbsPathText absTo), srs) =
+  let filesFrom = srs & map ((op AbsPathText) . _cpFrom)
+      filesFromFilename =
+        "/tmp/files-from/" <> (BSChar8.unpack (asciiHash filesFrom))
+      linedFilesFrom =
+        filesFrom &
+        map
+          (\f ->
+             case (Turtle.textToLine f) of
+               Just l -> l
+               Nothing -> CE.throw (NewlinesInFilenameException f))
+  in ( ("rsync -arv " ++
+        flags ++
+        " --files-from " ++
+        show filesFromFilename ++ " " ++ "/" ++ " " ++ T.unpack absTo)
+     , Turtle.decodeString filesFromFilename
+     , linedFilesFrom)
+
 -- | returns the rsync command, filename for the includes form and the includes from itself
-rsyncCommands :: [(CopyEntry, Bool)] -> [([Char], FP.FilePath, [Turtle.Line])]
+rsyncCommands :: [(CopyEntry, Bool)] -> [(String, FP.FilePath, [Turtle.Line])]
 rsyncCommands entries =
-  let newShared = entries & (filter snd) & map fst & groupShared
-      updateShared = entries & (filter (not . snd)) & map fst & groupShared
-      newAltered = entries & (filter snd) & map fst & groupAltered
-      updateAltered = entries & (filter (not . snd)) & map fst & groupAltered
-  in (newShared &
-      map
-        (\((Location locFrom, Location locTo), srs) ->
-           let filesFrom = srs & map ((op RelativePathText) . _rsFile)
-               filesFromFilename =
-                 "/tmp/files-from/" <> (BSChar8.unpack (asciiHash filesFrom))
-               linedFilesFrom =
-                 filesFrom &
-                 map
-                   (\f ->
-                      case (Turtle.textToLine f) of
-                        Just l -> l
-                        Nothing -> CE.throw (NewlinesInFilenameException f))
-           in ( ("rsync -arv --ignore-existing --files-from " ++
-                 show filesFromFilename ++
-                 " " ++ T.unpack locFrom ++ " " ++ T.unpack locTo)
-              , Turtle.decodeString filesFromFilename
-              , linedFilesFrom)))
+  let newShared = entries & (filter (not . snd)) & map fst & groupShared
+      updateShared = entries & (filter snd) & map fst & groupShared
+      newAltered = entries & (filter (not . snd)) & map fst & groupAltered
+      updateAltered = entries & (filter snd) & map fst & groupAltered
+  in (newShared & map (sharedCommand "--ignore-existing")) ++
+     (updateShared & map (sharedCommand "")) ++
+     (newAltered & map (alteredCommand "--ignore-existing")) ++
+     (updateAltered & map (alteredCommand ""))
 
 writeFilesFrom rsCommands =
   traverse

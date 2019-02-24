@@ -270,5 +270,5 @@ sampleRun = do
       (nget DBPath defaultCtx)
       (\conn -> proposeCopyCmdsText conn)
   Turtle.echo (repr ("num rscs " ++ show (length rscs)))
-  traverse (\(a, b, c) -> Turtle.echo "hi") rscs
-  -- writeFilesFrom rscs
+  Turtle.echo (repr (show rscs))
+  writeFilesFrom rscs
