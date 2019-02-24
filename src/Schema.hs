@@ -28,12 +28,11 @@ import qualified Data.Hashable as Hashable
 import qualified Data.Maybe as Maybe
 import Data.Monoid ((<>))
 import Data.String (fromString)
-import qualified Data.Text as Text
-import Data.Text (Text)
 import Data.Time.Clock (UTCTime)
 import qualified Data.Time as DT
 import qualified Data.Time.Clock as DTC
 import qualified Data.Text as T
+import Data.Text (Text)
 import Database.Beam.Sqlite (runBeamSqliteDebug)
 import Database.Beam.Sqlite.Syntax 
 import Database.Beam.Backend.SQL.SQL92 (HasSqlValueSyntax(..))
@@ -242,6 +241,12 @@ data ImpossibleDBResultException = ImpossibleDBResultException
   } deriving (Show, Typeable)
 
 instance CE.Exception ImpossibleDBResultException
+
+data NewlinesInFilenameException = NewlinesInFilenameException
+  { nlFilename :: !Text
+  } deriving (Show, Typeable)
+
+instance CE.Exception NewlinesInFilenameException
 
 -- Concrete, non-extensible version of the file state table.
 type FileStateF = Record '[FileStateIdF, Location, SequenceNumber, CheckTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
@@ -978,7 +983,8 @@ groupAltered entries =
   map (\ar -> (_cpTo ar, ar)) &
   Extra.groupSort
 
-rsyncCommands :: [(CopyEntry, Bool)] -> [[Char]]
+-- | returns the rsync command, filename for the includes form and the includes from itself
+rsyncCommands :: [(CopyEntry, Bool)] -> [([Char], FP.FilePath, [Turtle.Line])]
 rsyncCommands entries =
   let newShared = entries & (filter snd) & map fst & groupShared
       updateShared = entries & (filter (not . snd)) & map fst & groupShared
@@ -987,21 +993,27 @@ rsyncCommands entries =
   in (newShared &
       map
         (\((Location locFrom, Location locTo), srs) ->
-           let filesFrom =
-                 srs & map ((op RelativePathText) . _rsFile) & Text.unlines
-           in "rsync -arv --ignore-existing --files-from " ++
-              show (asciiHash filesFrom) ++
-              " " ++ show locFrom ++ " " ++ show locTo)) ++
-     (updateShared &
-      map
-        (\((Location locFrom, Location locTo), srs) ->
-           let filesFrom =
-                 srs & map ((op RelativePathText) . _rsFile) & Text.unlines
-           in "rsync -arv --files-from " ++
-              show (asciiHash filesFrom) ++
-              " " ++ show locFrom ++ " " ++ show locTo))
+           let filesFrom = srs & map ((op RelativePathText) . _rsFile)
+               filesFromFilename =
+                 "/tmp/files-from/" <> (BSChar8.unpack (asciiHash filesFrom))
+               linedFilesFrom =
+                 filesFrom &
+                 map
+                   (\f ->
+                      case (Turtle.textToLine f) of
+                        Just l -> l
+                        Nothing -> CE.throw (NewlinesInFilenameException f))
+           in ( ("rsync -arv --ignore-existing --files-from " ++
+                 show filesFromFilename ++
+                 " " ++ T.unpack locFrom ++ " " ++ T.unpack locTo)
+              , Turtle.decodeString filesFromFilename
+              , linedFilesFrom)))
 
-proposeCopyCmdsText :: SQ.Connection -> IO [[Char]]
+writeFilesFrom rsCommands =
+  traverse
+    (\(_, fileName, contents) -> Turtle.output fileName (Turtle.select contents))
+    rsCommands
+  
 proposeCopyCmdsText conn = do
   cmds <- proposeCopyCmds conn
   entries <-

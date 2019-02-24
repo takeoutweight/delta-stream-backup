@@ -265,4 +265,10 @@ sampleRun = do
          (Location "Nathans-MacBook-Pro-2.local/Users/nathan/Pictures")
          (Location
             "Nathans-MacBook-Pro-2.local/Users/nathan/SOMEWHEREELSE/Pictures"))
-  SQ.withConnection (nget DBPath defaultCtx) (\conn -> proposeCopyCmdsText conn)
+  rscs <-
+    SQ.withConnection
+      (nget DBPath defaultCtx)
+      (\conn -> proposeCopyCmdsText conn)
+  Turtle.echo (repr ("num rscs " ++ show (length rscs)))
+  traverse (\(a, b, c) -> Turtle.echo "hi") rscs
+  -- writeFilesFrom rscs
