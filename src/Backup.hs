@@ -20,7 +20,6 @@
 
 module Backup where
 
-import qualified Control.Exception as CE
 import qualified Control.Foldl as F
 import Control.Monad
 import qualified Control.Monad.Catch as Catch
@@ -29,35 +28,17 @@ import qualified Crypto.Hash as CH
 import qualified Crypto.Hash.Algorithms as CHA
 import qualified DBHelpers as DB
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Builder as BSB
-import qualified Data.DList as DL
-import qualified Data.HashMap.Strict as HashMap
-import Data.HashMap.Strict (HashMap)
-import qualified Data.String.Combinators as SC
-import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Time as DT
 import Data.Time.Clock (UTCTime)
 import qualified Data.Time.Clock as DTC
 import qualified Data.Time.Clock.POSIX as POSIX
-import Data.Typeable (Typeable)
 import Database.Beam
-import Database.Beam.Backend.SQL.SQL92
-import Database.Beam.Sqlite
-import qualified Database.Beam.Sqlite.Syntax as BSS
 import qualified Database.SQLite.Simple as SQ
-import qualified Database.SQLite.Simple.FromRow as SQS
-import qualified Database.SQLite.Simple.ToField as SQTF
 import qualified Filesystem.Path.CurrentOS as FP
 import Prelude hiding (FilePath, head)
 import qualified System.IO.Error as Error
-import qualified System.Random as Random
 import Turtle hiding (select)
 import qualified Turtle.Bytes as TB
-import Control.Lens hiding ((:>), Fold, cons)
-import qualified Data.Vinyl as V
-import Data.Vinyl.Lens (RElem)
-import Data.Vinyl.TypeLevel (RIndex)
 
 import Fields
 import Query
