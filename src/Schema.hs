@@ -874,7 +874,9 @@ allFileStates ::
 allFileStates = all_ (_file_state fileDB)
 
 -- But the type for these are horrendous.
-noCheckTime fileState = guard_ ((_check_time fileState) /=. val_ Nothing)
+hasCheckTime fileState = guard_ ((_check_time fileState) /=. val_ Nothing)
+
+noCheckTime fileState = guard_ ((_check_time fileState) ==. val_ Nothing)
 
 absPathIs fileState pathtext = guard_ ((_absolute_path fileState) ==. val_ pathtext)
 
@@ -902,7 +904,7 @@ fileExpected conn (AbsPathText pathtext) = do
        (select
           (do fileState <- allFileStates
               absPathIs fileState pathtext
-              noCheckTime fileState
+              hasCheckTime fileState
               pure fileState)))
   return
     (case fss of
@@ -919,10 +921,10 @@ proposeCopyCmds conn = do
     (DB.runSelectList
        conn
        (select
-          (do fileState <- all_ (_file_state fileDB)
-              guard_ ((_check_time fileState) ==. val_ Nothing)
-              guard_ ((_provenance_type fileState) ==. val_ 0)
-              guard_ ((_actual fileState) ==. 1)
+          (do fileState <- allFileStates
+              noCheckTime fileState
+              isMirrored fileState
+              isActual fileState
               pure fileState)))
   cps <-
     (traverse
