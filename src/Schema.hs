@@ -878,7 +878,7 @@ hasCheckTime fileState = guard_ ((_check_time fileState) /=. val_ Nothing)
 
 noCheckTime fileState = guard_ ((_check_time fileState) ==. val_ Nothing)
 
-absPathIs fileState pathtext = guard_ ((_absolute_path fileState) ==. val_ pathtext)
+absPathIs pathtext fileState = guard_ ((_absolute_path fileState) ==. val_ pathtext)
 
 isMirrored fileState = guard_ ((_provenance_type fileState) ==. val_ 0)
 
@@ -901,11 +901,7 @@ fileExpected conn (AbsPathText pathtext) = do
   fss <-
     (DB.runSelectOne
        conn
-       (select
-          (do fileState <- allFileStates
-              absPathIs fileState pathtext
-              hasCheckTime fileState
-              pure fileState)))
+       (select (allFileStates `qGuard` absPathIs pathtext `qGuard` hasCheckTime)))
   return
     (case fss of
        Just a -> True
@@ -921,11 +917,8 @@ proposeCopyCmds conn = do
     (DB.runSelectList
        conn
        (select
-          (do fileState <- allFileStates
-              noCheckTime fileState
-              isMirrored fileState
-              isActual fileState
-              pure fileState)))
+          (allFileStates `qGuard` noCheckTime `qGuard` isMirrored `qGuard`
+           isActual)))
   cps <-
     (traverse
        (\target ->
