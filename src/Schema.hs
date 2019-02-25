@@ -7,6 +7,8 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE NamedFieldPuns#-}
+-- {-# LANGUAGE PartialTypeSignatures #-}
+-- {-# LANGUAGE NamedWildCards #-}
 -- {-# LANGUAGE TypeSynonymInstances #-}
 -- {-# LANGUAGE TypeApplications #-}
 
@@ -890,7 +892,27 @@ qGuard mx mf = do
   mf x
   return x
 
--- selectFileState conn 
+-- This works but I don't know how to get rid of the type wildcard. Doesn't
+-- really make anyone's type better, just removes the need for that redundant
+-- "select":
+
+-- selectFileStateList ::
+--      res ~ (FileStateT (QExpr SqliteExpressionSyntax s))
+--   => SQ.Connection
+--   -> Q SqliteSelectSyntax FileDB _ res
+--   -> IO [FileState]
+-- selectFileStateList conn query = (DB.runSelectList conn (select query))
+
+-- Accepting only guards doesn't help either afaict.
+
+-- selectFileStateList ::
+--      SQ.Connection
+--   -> ((FileStateT (QExpr SqliteExpressionSyntax _s)) -> (Q SqliteSelectSyntax FileDB _s (FileStateT (QExpr SqliteExpressionSyntax _s))))
+--   -> IO [FileStateT Identity]
+-- selectFileStateList conn guard =
+--   (DB.runSelectList conn (select (allFileStates `qGuard` guard)))
+
+
 
 -- | Has there ever been a file known to be at this location? (i.e. are
 -- copies/updates to this filename expected to overwrite an existing file?) If
@@ -906,7 +928,7 @@ fileExpected conn (AbsPathText pathtext) = do
     (case fss of
        Just a -> True
        nothing -> False)
-             
+
 -- | Returns a list of proposed copy commands. Namely, any expected file in the
 -- db that hasn't been sha verified yet. Can propose overwrites as it doesn't
 -- check the filesystem - so trusts that the copy command used (eg rsync)
@@ -921,35 +943,36 @@ proposeCopyCmds conn = do
            isActual)))
   cps <-
     (traverse
-       (\target ->
-          case (_provenance_id target) of
-            FileStateId Nothing ->
-              CE.throw
-                (BadDBEncodingException
-                   "file_state"
-                   (_file_state_id target)
-                   "Should have provenance id defined given our query")
-            FileStateId (Just prov_id) -> do
-              msource <- (getFirstCanonicalProvenance conn prov_id)
-              return
-                (fmap
-                   (\source ->
-                      case ((nget RelativePathText source) ==
-                            (nget RelativePathText (unFileState target))) of
-                        False ->
-                          CopyAlteredRelative
-                            (AlteredRelativeCp
-                             { _cpFrom = (fget source)
-                             , _cpTo = (fget (unFileState target))
-                             })
-                        True ->
-                          CopySharedRelative
-                            (SharedRelativeCp
-                             { _rsFile = (fget source)
-                             , _rsFrom = (fget source)
-                             , _rsTo = (fget (unFileState target))
-                             }))
-                   msource))
+       (\fs ->
+          let target = (unFileState fs)
+          in case (fget target :: Provenance) of
+               Ingested ->
+                 CE.throw
+                   (BadDBEncodingException
+                      "file_state"
+                      (nget FileStateIdF target)
+                      "Should have provenance id defined given our query")
+               Mirrored prov_id -> do
+                 msource <- (getFirstCanonicalProvenance conn prov_id)
+                 return
+                   (fmap
+                      (\source ->
+                         case ((nget RelativePathText source) ==
+                               (nget RelativePathText target)) of
+                           False ->
+                             CopyAlteredRelative
+                               (AlteredRelativeCp
+                                { _cpFrom = (fget source)
+                                , _cpTo = (fget target)
+                                })
+                           True ->
+                             CopySharedRelative
+                               (SharedRelativeCp
+                                { _rsFile = (fget source)
+                                , _rsFrom = (fget source)
+                                , _rsTo = (fget target)
+                                }))
+                      msource))
        fss)
   return (Maybe.catMaybes cps)
  
