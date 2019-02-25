@@ -865,11 +865,6 @@ copyEntryAbsTo ce =
        AbsPathText (toAbsolute (_rsFile &: _rsTo &: Nil))
      CopyAlteredRelative (AlteredRelativeCp {_cpFrom, _cpTo}) -> _cpTo)
 
-data CopySort
-  = SortSharedRelative Location
-  | SortAlteredRelativeCp AbsPathText
-  deriving (Eq, Ord)
-
 -- Just experimenting w/ pulling out query fragments.
 allFileStates ::
      Q SqliteSelectSyntax FileDB s (FileStateT (QExpr SqliteExpressionSyntax s))
@@ -911,8 +906,6 @@ qGuard mx mf = do
 --   -> IO [FileStateT Identity]
 -- selectFileStateList conn guard =
 --   (DB.runSelectList conn (select (allFileStates `qGuard` guard)))
-
-
 
 -- | Has there ever been a file known to be at this location? (i.e. are
 -- copies/updates to this filename expected to overwrite an existing file?) If
@@ -975,24 +968,7 @@ proposeCopyCmds conn = do
                       msource))
        fss)
   return (Maybe.catMaybes cps)
- 
---     (Extra.groupSortOn (\cp -> (_cpFrom cp, _cpTo cp)) )
 
--- Sorts copy commands into groups that could live together in the same rsync command
--- I think I should just do this explicitly and get a pair of SharedRelativeCp's and AlteredRelativeCp's.
-rsyncSort :: [(CopyEntry, Bool)] -> [((CopySort, Bool), [CopyEntry])]
-rsyncSort entries =
-  (Extra.groupSort
-     (map
-        (\(ce, update) ->
-           ( ( (case ce of
-                  CopySharedRelative (SharedRelativeCp {_rsFile, _rsFrom, _rsTo}) ->
-                    SortSharedRelative _rsTo
-                  CopyAlteredRelative (AlteredRelativeCp {_cpFrom, _cpTo}) ->
-                    SortAlteredRelativeCp _cpTo)
-             , update)
-           , ce))
-        entries))
 
 matchCopySharedRelative :: CopyEntry -> Maybe SharedRelativeCp
 matchCopySharedRelative ce =
