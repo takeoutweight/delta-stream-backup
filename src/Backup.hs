@@ -60,7 +60,7 @@ import Data.Vinyl.Lens (RElem)
 import Data.Vinyl.TypeLevel (RIndex)
 
 import Fields
-import Schema
+import Query
 
 shasum :: Fold BS.ByteString (CH.Digest CHA.SHA1)
 shasum =
