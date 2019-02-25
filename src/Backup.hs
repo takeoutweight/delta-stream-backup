@@ -269,6 +269,5 @@ sampleRun = do
     SQ.withConnection
       (nget DBPath defaultCtx)
       (\conn -> proposeCopyCmdsText conn)
-  Turtle.echo (repr ("num rscs " ++ show (length rscs)))
-  Turtle.echo (repr (show rscs))
   writeFilesFrom rscs
+  echoRsyncCmds rscs

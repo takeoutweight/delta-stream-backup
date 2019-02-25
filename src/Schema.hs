@@ -32,6 +32,7 @@ import Data.Time.Clock (UTCTime)
 import qualified Data.Time as DT
 import qualified Data.Time.Clock as DTC
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as Encoding
 import Data.Text (Text)
 import Database.Beam.Sqlite (runBeamSqliteDebug)
 import Database.Beam.Sqlite.Syntax 
@@ -983,14 +984,13 @@ groupAltered entries =
   map (\ar -> (_cpTo ar, ar)) &
   Extra.groupSort
 
+type RsyncCommand = (Text, FP.FilePath, [Turtle.Line])
+
 sharedCommand ::
-     String
-  -> ((Location, Location), [SharedRelativeCp])
-  -> (String, FP.FilePath, [Turtle.Line])
+     Text -> ((Location, Location), [SharedRelativeCp]) -> RsyncCommand
 sharedCommand flags ((Location locFrom, Location locTo), srs) =
   let filesFrom = srs & map ((op RelativePathText) . _rsFile)
-      filesFromFilename =
-        "/tmp/files-from/" <> (BSChar8.unpack (asciiHash filesFrom))
+      filesFromFilename = "/tmp/files-from/" <> (asciiHash filesFrom)
       linedFilesFrom =
         filesFrom &
         map
@@ -998,20 +998,16 @@ sharedCommand flags ((Location locFrom, Location locTo), srs) =
              case (Turtle.textToLine f) of
                Just l -> l
                Nothing -> CE.throw (NewlinesInFilenameException f))
-  in ( ("rsync -arv " ++ flags ++ " --files-from " ++
-        show filesFromFilename ++
-        " " ++ T.unpack locFrom ++ " " ++ T.unpack locTo)
-     , Turtle.decodeString filesFromFilename
+  in ( ("rsync -arv " <> flags <> " --files-from " <> filesFromFilename <> " " <>
+        locFrom <>
+        locTo)
+     , Turtle.fromText filesFromFilename
      , linedFilesFrom)
 
-alteredCommand ::
-     String
-  -> (AbsPathText, [AlteredRelativeCp])
-  -> (String, FP.FilePath, [Turtle.Line])
+alteredCommand :: Text -> (AbsPathText, [AlteredRelativeCp]) -> RsyncCommand
 alteredCommand flags ((AbsPathText absTo), srs) =
   let filesFrom = srs & map ((op AbsPathText) . _cpFrom)
-      filesFromFilename =
-        "/tmp/files-from/" <> (BSChar8.unpack (asciiHash filesFrom))
+      filesFromFilename = "/tmp/files-from/" <> (asciiHash filesFrom)
       linedFilesFrom =
         filesFrom &
         map
@@ -1019,15 +1015,15 @@ alteredCommand flags ((AbsPathText absTo), srs) =
              case (Turtle.textToLine f) of
                Just l -> l
                Nothing -> CE.throw (NewlinesInFilenameException f))
-  in ( ("rsync -arv " ++
-        flags ++
-        " --files-from " ++
-        show filesFromFilename ++ " " ++ "/" ++ " " ++ T.unpack absTo)
-     , Turtle.decodeString filesFromFilename
+  in ( ("rsync -arv " <> flags <> " --files-from " <> filesFromFilename <> " " <>
+        "/" <>
+        " " <>
+        absTo)
+     , Turtle.fromText filesFromFilename
      , linedFilesFrom)
 
 -- | returns the rsync command, filename for the includes form and the includes from itself
-rsyncCommands :: [(CopyEntry, Bool)] -> [(String, FP.FilePath, [Turtle.Line])]
+rsyncCommands :: [(CopyEntry, Bool)] -> [RsyncCommand]
 rsyncCommands entries =
   let newShared = entries & (filter (not . snd)) & map fst & groupShared
       updateShared = entries & (filter snd) & map fst & groupShared
@@ -1038,11 +1034,7 @@ rsyncCommands entries =
      (newAltered & map (alteredCommand "--ignore-existing")) ++
      (updateAltered & map (alteredCommand ""))
 
-writeFilesFrom rsCommands =
-  traverse
-    (\(_, fileName, contents) -> Turtle.output fileName (Turtle.select contents))
-    rsCommands
-  
+proposeCopyCmdsText :: SQ.Connection -> IO [RsyncCommand]
 proposeCopyCmdsText conn = do
   cmds <- proposeCopyCmds conn
   entries <-
@@ -1053,17 +1045,30 @@ proposeCopyCmdsText conn = do
          return (ce, exp))
   return (rsyncCommands entries)
 
+-- | Writes the files-from files to disk
+writeFilesFrom :: [RsyncCommand] -> IO [()]
+writeFilesFrom rsCommands =
+  traverse
+    (\(_, fileName, contents) -> Turtle.output fileName (Turtle.select contents))
+    rsCommands
+
+-- | echo the rsync commands
+echoRsyncCmds :: [RsyncCommand] -> IO [()]
+echoRsyncCmds rsCommands =
+  traverse (\(command, _, _) -> Turtle.echo (Turtle.repr command)) rsCommands
+
 -- asciiHash :: Hashable.Hashable a => a -> BSChar8.ByteString
 asciiHash obj =
-  BSChar8.filter
-    (\c -> c /= '=')
-    (BSChar8.map
-       (\c ->
-          case c of
-            '+' -> '-'
-            '/' -> '_'
-            c -> c)
-       (Base64.encode (BSLazy.toStrict (Binary.encode (Hashable.hash obj)))))
+  (BSChar8.filter
+     (\c -> c /= '=')
+     (BSChar8.map
+        (\c ->
+           case c of
+             '+' -> '-'
+             '/' -> '_'
+             c -> c)
+        (Base64.encode (BSLazy.toStrict (Binary.encode (Hashable.hash obj)))))) &
+  Encoding.decodeLatin1
 
 -- | Records successful requests
 createRequestTable :: SQ.Query
