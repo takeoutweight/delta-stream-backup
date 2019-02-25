@@ -899,6 +899,7 @@ qGuard mx mf = do
 -- selectFileStateList conn query = (DB.runSelectList conn (select query))
 
 -- Accepting only guards doesn't help either afaict.
+-- Found type wildcard ‘_s’ standing for ‘Database.Beam.Query.QueryInaccessible’
 
 -- selectFileStateList ::
 --      SQ.Connection
