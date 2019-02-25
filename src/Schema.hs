@@ -40,9 +40,8 @@ import Database.Beam.Backend.SQL.SQL92 (HasSqlValueSyntax(..))
 import qualified Data.String.Combinators as SC
 import Database.Beam
        (Beamable, Columnar, Database, DatabaseSettings, PrimaryKey, Table,
-        TableEntity, (/=.), (==.), (>.), all_, defaultDbSettings, desc_, guard_,
-        orderBy_, runSelectReturningList, runSelectReturningOne, select,
-        val_)
+        TableEntity, (/=.), (==.), (>.), all_, defaultDbSettings, desc_,
+        guard_, orderBy_, select, val_)
 import Database.Beam
 import Database.Beam.Sqlite
 import qualified Database.Beam as B
@@ -324,14 +323,12 @@ unFileState fs =
 
 getFileStateById :: SQ.Connection -> Int -> IO (Maybe FileState)
 getFileStateById conn fileStateID =
-  (runBeamSqliteDebug
-     putStrLn
+  (DB.runSelectOne
      conn
-     (runSelectReturningOne
-        (select
-           (do fileState <- all_ (_file_state fileDB)
-               guard_ ((_file_state_id fileState) ==. val_ fileStateID)
-               pure fileState))))
+     (select
+        (do fileState <- all_ (_file_state fileDB)
+            guard_ ((_file_state_id fileState) ==. val_ fileStateID)
+            pure fileState)))
 
 -- Could probably go via archive and relative path too - these are denormalized.
 
@@ -340,31 +337,29 @@ getActualFileState ::
   => Record rs
   -> IO (Maybe FileStateF)
 getActualFileState ctx =
-  (runBeamSqliteDebug
-     putStrLn
+  (DB.runSelectOne
      ((fget ctx) :: SQ.Connection)
-     (runSelectReturningOne
-        (select
-           (do fileState <- all_ (_file_state fileDB)
-               guard_ (((_actual fileState) ==. val_ 1) &&.
-                       ((_absolute_path fileState) ==. val_ (nget AbsPathText ctx)))
-               pure fileState)))) &
+     (select
+        (do fileState <- all_ (_file_state fileDB)
+            guard_
+              (((_actual fileState) ==. val_ 1) &&.
+               ((_absolute_path fileState) ==. val_ (nget AbsPathText ctx)))
+            pure fileState))) &
   fmap (fmap unFileState)
 
 -- | search by relative filename in a possibly different root Location.
 getActualFileStateRelative ::
      SQ.Connection -> Location -> RelativePathText -> IO (Maybe FileStateF)
 getActualFileStateRelative conn (Location loc) rel =
-  (runBeamSqliteDebug
-     putStrLn
+  (DB.runSelectOne
      conn
-     (runSelectReturningOne
-        (select
-           (do fileState <- all_ (_file_state fileDB)
-               guard_ (((_actual fileState) ==. val_ 1) &&.
-                       ((_location fileState) ==. val_ loc) &&.
-                       ((_relative_path fileState) ==. val_ (op RelativePathText rel)))
-               pure fileState)))) &
+     (select
+        (do fileState <- all_ (_file_state fileDB)
+            guard_
+              (((_actual fileState) ==. val_ 1) &&.
+               ((_location fileState) ==. val_ loc) &&.
+               ((_relative_path fileState) ==. val_ (op RelativePathText rel)))
+            pure fileState))) &
   fmap (fmap unFileState)
 
 --               (orderBy_
@@ -378,18 +373,16 @@ getActualFileStateRelative conn (Location loc) rel =
 -- | after, not including, sequenceNumber. Sorted by sequence number.
 getChangesSince :: SQ.Connection -> Int -> Location -> IO [FileStateF]
 getChangesSince conn sequenceNumber (Location location) =
-  (runBeamSqliteDebug
-     putStrLn
+  (DB.runSelectList
      conn
-     (runSelectReturningList
-        (select
-           (orderBy_
-              (\s -> (asc_ (_sequence_number s)))
-              (do fileState <- all_ (_file_state fileDB)
-                  guard_ ((_location fileState) ==. val_ location)
-                  guard_ ((_actual fileState) ==. val_ 1)
-                  guard_ ((_sequence_number fileState) >. val_ sequenceNumber)
-                  pure fileState))))) &
+     (select
+        (orderBy_
+           (\s -> (asc_ (_sequence_number s)))
+           (do fileState <- all_ (_file_state fileDB)
+               guard_ ((_location fileState) ==. val_ location)
+               guard_ ((_actual fileState) ==. val_ 1)
+               guard_ ((_sequence_number fileState) >. val_ sequenceNumber)
+               pure fileState)))) &
   fmap (fmap unFileState)
 
 {- | FilePath seems to only treat paths with trailing slashes as "directories" but
@@ -877,15 +870,13 @@ data CopySort
 fileExpected :: SQ.Connection -> AbsPathText -> IO Bool
 fileExpected conn (AbsPathText pathtext) = do
   fss <-
-    (runBeamSqliteDebug
-       putStrLn
+    (DB.runSelectOne
        conn
-       (runSelectReturningOne
-          (select
-             (do fileState <- all_ (_file_state fileDB)
-                 guard_ ((_absolute_path fileState) ==. val_ pathtext)
-                 guard_ ((_check_time fileState) /=. val_ Nothing)
-                 pure fileState))))
+       (select
+          (do fileState <- all_ (_file_state fileDB)
+              guard_ ((_absolute_path fileState) ==. val_ pathtext)
+              guard_ ((_check_time fileState) /=. val_ Nothing)
+              pure fileState)))
   return
     (case fss of
        Just a -> True
@@ -898,16 +889,14 @@ fileExpected conn (AbsPathText pathtext) = do
 proposeCopyCmds :: SQ.Connection -> IO [CopyEntry]
 proposeCopyCmds conn = do
   fss <-
-    (runBeamSqliteDebug
-       putStrLn
+    (DB.runSelectList
        conn
-       (runSelectReturningList
-          (select
-             (do fileState <- all_ (_file_state fileDB)
-                 guard_ ((_check_time fileState) ==. val_ Nothing)
-                 guard_ ((_provenance_type fileState) ==. val_ 0)
-                 guard_ ((_actual fileState) ==. 1)
-                 pure fileState))))
+       (select
+          (do fileState <- all_ (_file_state fileDB)
+              guard_ ((_check_time fileState) ==. val_ Nothing)
+              guard_ ((_provenance_type fileState) ==. val_ 0)
+              guard_ ((_actual fileState) ==. 1)
+              pure fileState)))
   cps <-
     (traverse
        (\target ->

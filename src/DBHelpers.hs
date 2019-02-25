@@ -146,3 +146,27 @@ withSavepoint conn action =
 -- Or just a non-list-returning one at least to shorten up that super long one I have to write.
 
 -- :set -fno-warn-partial-type-signatures
+
+-- If I bake in the (DB.select query) too, then I get the
+-- Database.Beam.Query.QueryInaccessible unexported type problem.
+runSelectList ::
+     DBS.FromBackendRow DBS.Sqlite a
+  => SQ.Connection
+  -> DBQ.SqlSelect DBSS.SqliteSelectSyntax a
+  -> IO [a]
+runSelectList conn query =
+  (DBS.runBeamSqliteDebug
+     putStrLn
+     conn
+     (DB.runSelectReturningList query))
+
+runSelectOne ::
+     DBS.FromBackendRow DBS.Sqlite a
+  => SQ.Connection
+  -> DBQ.SqlSelect DBSS.SqliteSelectSyntax a
+  -> IO (Maybe a)
+runSelectOne conn query =
+  (DBS.runBeamSqliteDebug
+     putStrLn
+     conn
+     (DB.runSelectReturningOne query))
