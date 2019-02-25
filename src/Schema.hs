@@ -876,7 +876,7 @@ allFileStates = all_ (_file_state fileDB)
 -- But the type for these are horrendous.
 noCheckTime fileState = guard_ ((_check_time fileState) /=. val_ Nothing)
 
-absPathIs pathtext fileState = guard_ ((_absolute_path fileState) ==. val_ pathtext)
+absPathIs fileState pathtext = guard_ ((_absolute_path fileState) ==. val_ pathtext)
 
 isMirrored fileState = guard_ ((_provenance_type fileState) ==. val_ 0)
 
@@ -901,14 +901,14 @@ fileExpected conn (AbsPathText pathtext) = do
        conn
        (select
           (do fileState <- allFileStates
-              absPathIs pathtext fileState
+              absPathIs fileState pathtext
               noCheckTime fileState
               pure fileState)))
   return
     (case fss of
        Just a -> True
        nothing -> False)
-
+             
 -- | Returns a list of proposed copy commands. Namely, any expected file in the
 -- db that hasn't been sha verified yet. Can propose overwrites as it doesn't
 -- check the filesystem - so trusts that the copy command used (eg rsync)
@@ -920,9 +920,9 @@ proposeCopyCmds conn = do
        conn
        (select
           (do fileState <- all_ (_file_state fileDB)
-              noCheckTime fileState
-              isMirrored fileState
-              isActual fileState
+              guard_ ((_check_time fileState) ==. val_ Nothing)
+              guard_ ((_provenance_type fileState) ==. val_ 0)
+              guard_ ((_actual fileState) ==. 1)
               pure fileState)))
   cps <-
     (traverse
