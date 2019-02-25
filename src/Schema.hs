@@ -989,6 +989,7 @@ sharedCommand flags ((Location locFrom, Location locTo), srs) =
                Nothing -> CE.throw (NewlinesInFilenameException f))
   in ( ("rsync -arv " <> flags <> " --files-from " <> filesFromFilename <> " " <>
         locFrom <>
+        " " <>
         locTo)
      , Turtle.fromText filesFromFilename
      , linedFilesFrom)
