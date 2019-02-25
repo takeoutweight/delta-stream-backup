@@ -35,8 +35,12 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as Encoding
 import Data.Text (Text)
 import Database.Beam.Sqlite (runBeamSqliteDebug)
-import Database.Beam.Sqlite.Syntax 
-import Database.Beam.Backend.SQL.SQL92 (HasSqlValueSyntax(..))
+import Database.Beam.Sqlite.Syntax
+import qualified Database.Beam.Backend.SQL.SQL92 as SQL92
+import Database.Beam.Backend.SQL.SQL92
+       (HasSqlValueSyntax(..), Sql92SanityCheck, IsSql92SelectSyntax)
+import qualified Database.Beam.Query as DBQ
+import qualified Database.Beam.Query.Internal as DBQI
 import qualified Data.String.Combinators as SC
 import Database.Beam
        (Beamable, Columnar, Database, DatabaseSettings, PrimaryKey, Table,
@@ -44,6 +48,7 @@ import Database.Beam
         guard_, orderBy_, select, val_)
 import Database.Beam
 import Database.Beam.Sqlite
+import qualified Database.Beam.Sqlite.Connection as SqliteConnection
 import qualified Database.Beam as B
 import qualified Database.Beam.Sqlite.Syntax as BSS
 import qualified Database.SQLite.Simple as SQ
@@ -863,6 +868,28 @@ data CopySort
   | SortAlteredRelativeCp AbsPathText
   deriving (Eq, Ord)
 
+-- Just experimenting w/ pulling out query fragments.
+allFileStates ::
+     Q SqliteSelectSyntax FileDB s (FileStateT (QExpr SqliteExpressionSyntax s))
+allFileStates = all_ (_file_state fileDB)
+
+-- But the type for these are horrendous.
+noCheckTime fileState = guard_ ((_check_time fileState) /=. val_ Nothing)
+
+absPathIs pathtext fileState = guard_ ((_absolute_path fileState) ==. val_ pathtext)
+
+isMirrored fileState = guard_ ((_provenance_type fileState) ==. val_ 0)
+
+isActual fileState = guard_ ((_actual fileState) ==. 1)
+
+qGuard :: Monad m => m a -> (a -> m b) -> m a
+qGuard mx mf = do
+  x <- mx
+  mf x
+  return x
+
+-- selectFileState conn 
+
 -- | Has there ever been a file known to be at this location? (i.e. are
 -- copies/updates to this filename expected to overwrite an existing file?) If
 -- not we know we can have a "preserve existing" flag on rsynce, etc, to help us
@@ -873,15 +900,15 @@ fileExpected conn (AbsPathText pathtext) = do
     (DB.runSelectOne
        conn
        (select
-          (do fileState <- all_ (_file_state fileDB)
-              guard_ ((_absolute_path fileState) ==. val_ pathtext)
-              guard_ ((_check_time fileState) /=. val_ Nothing)
+          (do fileState <- allFileStates
+              absPathIs pathtext fileState
+              noCheckTime fileState
               pure fileState)))
   return
     (case fss of
        Just a -> True
        nothing -> False)
-             
+
 -- | Returns a list of proposed copy commands. Namely, any expected file in the
 -- db that hasn't been sha verified yet. Can propose overwrites as it doesn't
 -- check the filesystem - so trusts that the copy command used (eg rsync)
@@ -893,9 +920,9 @@ proposeCopyCmds conn = do
        conn
        (select
           (do fileState <- all_ (_file_state fileDB)
-              guard_ ((_check_time fileState) ==. val_ Nothing)
-              guard_ ((_provenance_type fileState) ==. val_ 0)
-              guard_ ((_actual fileState) ==. 1)
+              noCheckTime fileState
+              isMirrored fileState
+              isActual fileState
               pure fileState)))
   cps <-
     (traverse
