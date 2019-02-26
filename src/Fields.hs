@@ -22,8 +22,6 @@ import Data.Text (Text)
 import Data.Time.Clock (UTCTime)
 import qualified Data.Vinyl.Functor as VF
 import qualified Data.Vinyl.TypeLevel as VT
-import qualified Database.SQLite.Simple as SQ
-import GHC.Exts (Constraint)
 import GHC.Generics (Generic)
 import Turtle (FilePath)
 import Prelude hiding (FilePath)

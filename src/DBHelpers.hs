@@ -14,9 +14,9 @@ import Data.String (fromString)
 import Data.Monoid ((<>))
 import qualified Database.Beam as DB
 import qualified Database.Beam.Backend.SQL as DBS
-import qualified Database.Beam.Backend.SQL.SQL92 as SQL92
+-- import qualified Database.Beam.Backend.SQL.SQL92 as SQL92
 import qualified Database.Beam.Query as DBQ
-import qualified Database.Beam.Query.Internal as DBQI
+-- import qualified Database.Beam.Query.Internal as DBQI
 import qualified Database.Beam.Sqlite as DBS -- Doesn't like my selectOne type
                                              -- unless I import this, even
                                              -- though I don't use it explicitly
