@@ -19,6 +19,12 @@ library
   other-modules:       DBHelpers
                      , Fields
                      , Schema
+                     , CopyCommands
+                     , FileState
+                     , IngestPath
+                     , Logic
+                     , MirrorChanges
+                     , Query
   build-depends:       base >= 4.7 && < 5
                      , base64-bytestring
                      , beam-core
