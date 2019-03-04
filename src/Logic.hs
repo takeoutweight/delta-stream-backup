@@ -135,6 +135,11 @@ getActualFileStateRelative conn (Location loc) rel =
 ensureTrailingSlash :: FP.FilePath -> FP.FilePath
 ensureTrailingSlash fp = fp FP.</> ""
 
+locationPath :: Location -> FP.FilePath
+locationPath (Location loc) =
+  let (host, root) = (T.breakOn "/" loc)
+  in (ensureTrailingSlash (fromString (T.unpack root)))
+
 toRelative :: (Has Location r, Has AbsPath r) => Record r -> Maybe FP.FilePath
 toRelative ctx =
   let (host, root) = (T.breakOn "/" (nget Location ctx))

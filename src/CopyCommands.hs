@@ -143,7 +143,7 @@ asciiHash obj =
 
 sharedCommand ::
      Text -> ((Location, Location), [SharedRelativeCp]) -> RsyncCommand
-sharedCommand flags ((Location locFrom, Location locTo), srs) =
+sharedCommand flags ((locFrom, locTo), srs) =
   let filesFrom = srs & map ((op RelativePathText) . _rsFile)
       filesFromFilename = "/tmp/files-from/" <> (asciiHash filesFrom)
       linedFilesFrom =
@@ -154,9 +154,9 @@ sharedCommand flags ((Location locFrom, Location locTo), srs) =
                Just l -> l
                Nothing -> CE.throw (NewlinesInFilenameException f))
   in ( ("rsync -arv " <> flags <> " --files-from " <> filesFromFilename <> " " <>
-        locFrom <>
+        (Turtle.format Turtle.fp (locationPath locFrom)) <>
         " " <>
-        locTo)
+        (Turtle.format  Turtle.fp (locationPath locTo)))
      , Turtle.fromText filesFromFilename
      , linedFilesFrom)
 
