@@ -35,7 +35,18 @@ import FileState
 import Fields
 
 -- Concrete, non-extensible version of the file state table.
-type FileStateF = Record '[FileStateIdF, Location, SequenceNumber, CheckTime, AbsPathText, RelativePathText, Filename, Provenance, Canonical, Actual, FileDetailsR]
+type FileStateF
+   = Record '[ FileStateIdF
+             , Location
+             , SequenceNumber
+             , CheckTime
+             , AbsPathText
+             , RelativePathText
+             , Filename
+             , Provenance
+             , Canonical
+             , Actual
+             , FileDetailsR]
 
 data BadDBEncodingException = BadDBEncodingException
   { table :: !Text

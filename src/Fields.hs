@@ -122,6 +122,7 @@ instance Wrapped FileStateIdF
 newtype SequenceNumber = SequenceNumber Int deriving (Show, Generic)
 instance Wrapped SequenceNumber
 
+-- | Did this entry represent a mirror from somewhere else? Or straight-from-the-filesystem?
 data Provenance = Mirrored Int | Ingested deriving (Show, Generic)
 
 -- | NonCanonical means this file/hash is not meant to be propagated. It possibly represents corrupted data.
