@@ -10,3 +10,5 @@
 import Database.Beam
 import Turtle hiding (select)
 import Prelude hiding (FilePath, head)
+-- Wasn't this the default?
+:set -fno-defer-type-errors
