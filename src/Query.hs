@@ -56,13 +56,15 @@ type FileStateF
              , Actual
              , FileDetailsR]
 
-type SimpleThing = Record '[ FileStateIdF, Location, Provenance]
-
 fileStateFormat :: CAS.JsonFormat e FileStateF
 fileStateFormat = CAS.recordJsonFormat CAS.defaultJsonFormatRecord
 
+instance CAS.DefaultJsonFormat FileStateF where
+  defaultJsonFormat = fileStateFormat
+
 -- CAS.toJsonWithFormat fileStateFormat (Location "here" &: Nil)
 -- AS.encode (CAS.toJsonWithFormat fileStateFormat (Location "here" &: Nil))
+-- BSL.putStrLn (AS.encode (CAS.toJsonWithFormat CAS.defaultJsonFormat fs))
 -- let Just val = (AS.decode "{\"Location\":\"here\"}" :: Maybe Value)
 -- (AS.decode "{\"Location\":\"here\"}" :: Maybe Value) & fmap (ASBE.parseValue (CAS.fromJsonWithFormat fileStateFormat))
 -- let Right val = (ASBE.parse (CAS.fromJsonWithFormat fileStateFormat) "{\"FileStateIdF\":3, \"Location\":\"here\"}")

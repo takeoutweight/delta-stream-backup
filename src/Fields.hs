@@ -41,6 +41,7 @@ import Prelude hiding (FilePath)
 -- setIdentity = VF.Identity
 
 -- had to move to this Identity to work w/ composite aeson stuff?
+-- but I think it screwed up my show instance as it shows "Identity" now for each field
 type Record = Rec DFI.Identity
 getIdentity = DFI.runIdentity
 setIdentity = DFI.Identity
