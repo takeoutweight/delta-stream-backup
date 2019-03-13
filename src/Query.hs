@@ -1,6 +1,7 @@
 -- Module for presenting queries in the higher level (non-raw SQL) encodings,
 -- whose definitions require raw DB terminology.
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -8,7 +9,8 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE NamedFieldPuns#-}
+{-# LANGUAGE NamedFieldPuns #-}
+
 -- {-# LANGUAGE PartialTypeSignatures #-}
 -- {-# LANGUAGE NamedWildCards #-}
 -- {-# LANGUAGE TypeSynonymInstances #-}
@@ -17,8 +19,13 @@
 module Query where
 
 import qualified Control.Exception as CE
+import qualified Composite.Aeson as CAS
+import qualified Data.Aeson as AS
+import qualified Data.Aeson.BetterErrors as ASBE
+import qualified Data.Either.Combinators as E
 import Data.Text (Text)
 import Data.Typeable (Typeable)
+import qualified Data.Vinyl.Functor as VF
 import Database.Beam.Sqlite (runBeamSqliteDebug)
 import Database.Beam.Sqlite.Syntax
 import Database.Beam
@@ -26,6 +33,7 @@ import Database.Beam
         val_)
 import qualified Database.Beam as Beam
 import qualified Database.SQLite.Simple as SQ
+import GHC.Generics (Generic)
 import Prelude hiding (FilePath, head)
 import qualified Turtle as Turtle
 
@@ -47,6 +55,18 @@ type FileStateF
              , Canonical
              , Actual
              , FileDetailsR]
+
+type SimpleThing = Record '[ FileStateIdF, Location, Provenance]
+
+fileStateFormat :: CAS.JsonFormat e FileStateF
+fileStateFormat = CAS.recordJsonFormat CAS.defaultJsonFormatRecord
+
+-- CAS.toJsonWithFormat fileStateFormat (Location "here" &: Nil)
+-- AS.encode (CAS.toJsonWithFormat fileStateFormat (Location "here" &: Nil))
+-- let Just val = (AS.decode "{\"Location\":\"here\"}" :: Maybe Value)
+-- (AS.decode "{\"Location\":\"here\"}" :: Maybe Value) & fmap (ASBE.parseValue (CAS.fromJsonWithFormat fileStateFormat))
+-- let Right val = (ASBE.parse (CAS.fromJsonWithFormat fileStateFormat) "{\"FileStateIdF\":3, \"Location\":\"here\"}")
+
 
 data BadDBEncodingException = BadDBEncodingException
   { table :: !Text

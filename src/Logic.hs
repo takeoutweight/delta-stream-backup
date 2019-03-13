@@ -19,6 +19,7 @@ module Logic where
 
 import qualified Control.Exception as CE
 import Control.Lens ((&), op)
+import Data.Aeson as AS
 import Data.Monoid ((<>))
 import Data.String (fromString)
 import qualified Data.Text as T

@@ -24,16 +24,21 @@ library
                      , IngestPath
                      , Logic
                      , MirrorChanges
+                     , Protocol
                      , Query
   build-depends:       base >= 4.7 && < 5
+                     , aeson
+                     , aeson-better-errors
                      , base64-bytestring
                      , beam-core
                      , beam-sqlite
                      , beam-migrate
                      , binary
                      , bytestring
+                     , composite-aeson
                      , cryptonite
                      , dlist
+                     , either
                      , exceptions
                      , extensible
                      , extra

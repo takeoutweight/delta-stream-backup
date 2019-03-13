@@ -29,6 +29,7 @@ import Turtle hiding (select)
 
 import Fields
 import Query
+import Logic
 import MirrorChanges
 import CopyCommands
 import IngestPath
@@ -70,6 +71,7 @@ cpToDir from toDir = cp from (toDir </> (filename from))
 -- createDB (nget DBPath defaultCtx)
 -- ingestPath defaultCtx "/Users/nathan/Pictures/2013/2013-05-15/"
 -- SQ.withConnection (nget DBPath defaultCtx) (\conn -> mirrorChangesFromLocation conn (Location "/Users/nathan/Pictures") (Location "/Users/nathan/SOMEWHEREELSE/Pictures"))
+-- Just fs <- SQ.withConnection (nget DBPath defaultCtx) (\conn -> getFileStateById conn 1)
 
 sampleRun = do
   rm (fromString (nget DBPath defaultCtx))

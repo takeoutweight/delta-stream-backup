@@ -74,6 +74,8 @@ packages:
 # Just followed stack's suggestions. Probably mostly due to upper bounds on beam
 
 extra-deps:
+- composite-base-0.5.5.0
+- composite-aeson-0.5.5.0
 - beam-sqlite-0.3.2.3 # For UTCTime built in
 # - beam-core-0.7.2.2
 # - beam-migrate-0.3.2.1
