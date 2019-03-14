@@ -33,6 +33,7 @@ import Data.Proxy (Proxy(..))
 import qualified Data.Text as T
 import Data.Text (Text)
 import Data.Time.Clock (UTCTime)
+import qualified Data.Time.Format as DTF
 import qualified Data.Functor.Identity as DFI
 import qualified Data.Typeable as DT
 import qualified Data.Vinyl.Core as VC
@@ -54,7 +55,7 @@ setIdentity = DFI.Identity
 
 instance {-# OVERLAPS #-} VT.RecAll DFI.Identity rs Show => Show (Record rs) where
   show xs =
-    (\str -> str <> " &: Nil") .
+    (\str -> "(" <> str <> " &: Nil)") .
     List.intercalate " &: " .
     recordToList .
     rmap
@@ -143,16 +144,34 @@ instance Wrapped Filename
 newtype Rechecksum = Rechecksum (Maybe UTCTime -> Maybe UTCTime -> Bool) deriving (Generic)
 instance Wrapped Rechecksum
 
+-- utc ish (trying to eyeball default show instance)
+utcFormat = "%Y-%m-%d %H:%M:%S%Q %Z"
+
+utcTime :: String -> UTCTime
+utcTime s = DTF.parseTimeOrError False DTF.defaultTimeLocale utcFormat s
+
+showUtcTime :: UTCTime -> String
+showUtcTime t =
+  "utcTime \"" <> DTF.formatTime DTF.defaultTimeLocale utcFormat t <>
+  "\""
+
 -- | Null CheckTime means we know the expected hash but we've never checked
-newtype CheckTime = CheckTime (Maybe UTCTime) deriving (Show, Generic)
+newtype CheckTime = CheckTime (Maybe UTCTime) deriving (Generic)
 instance Wrapped CheckTime
 instance {-# OVERLAPS #-} (CAS.DefaultJsonFormatRecord rs) => CAS.DefaultJsonFormatRecord (CheckTime : rs) where
   defaultJsonFormatRecord = field (CAS.maybeJsonFormat CAS.iso8601DateTimeJsonFormat) :& defaultJsonFormatRecord
+instance Show CheckTime where
+  show (CheckTime mt) =
+    case mt of
+      Just t -> "CheckTime (Just (" <> showUtcTime t <> "))"
+      Nothing -> "Checktime Nothing"
 
-newtype ModTime = ModTime UTCTime deriving (Show, Generic, Eq)
+newtype ModTime = ModTime UTCTime deriving (Generic, Eq)
 instance Wrapped ModTime
 instance {-# OVERLAPS #-} (CAS.DefaultJsonFormatRecord rs) => CAS.DefaultJsonFormatRecord (ModTime : rs) where
   defaultJsonFormatRecord = field CAS.iso8601DateTimeJsonFormat :& defaultJsonFormatRecord
+instance Show ModTime where
+  show (ModTime mt) = "ModTime (" <> showUtcTime mt <>")"
 
 newtype FileSize = FileSize Int deriving (Show, Generic, Eq)
 instance Wrapped FileSize
