@@ -54,18 +54,22 @@ getIdentity = DFI.runIdentity
 setIdentity = DFI.Identity
 
 instance {-# OVERLAPS #-} VT.RecAll DFI.Identity rs Show => Show (Record rs) where
-  show xs =
-    (\str -> "(" <> str <> " &: Nil)") .
-    List.intercalate " &: " .
-    recordToList .
-    rmap
-      (\(VF.Compose (Dict x)) ->
-         VF.Const $
-         (let str = (show x)
-          in case List.stripPrefix "Identity " str of
-               Just a -> a
-               Nothing -> str)) $
-    reifyConstraint (Proxy :: Proxy Show) xs
+  show xs = showsPrec 0 xs ""
+  showsPrec p xs =
+    showParen
+      (p > fconsPrecedence)
+      (\suffix ->
+         (\str -> str <> " &: Nil" <> suffix) .
+         List.intercalate " &: " .
+         recordToList .
+         rmap
+           (\(VF.Compose (Dict x)) ->
+              VF.Const $
+              (let str = (showsPrec (fconsPrecedence + 1) x "")
+               in case List.stripPrefix "Identity " str of
+                    Just a -> a
+                    Nothing -> str)) $
+         reifyConstraint (Proxy :: Proxy Show) xs)
 
 pattern Nil :: Rec f '[]
 pattern Nil = RNil
@@ -96,7 +100,10 @@ fcast = rcast
 (&:) :: r -> Record rs -> Record (r : rs)
 e &: rs = fcons e rs
 infixr 5 &:
-  
+
+fconsPrecedence ::  Int
+fconsPrecedence = 5
+
 newtype DBPath = DBPath String deriving (Show, Generic)
 instance Wrapped DBPath
 
