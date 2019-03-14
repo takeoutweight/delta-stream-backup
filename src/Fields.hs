@@ -13,6 +13,9 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DataKinds #-}
 
+{-# LANGUAGE TypeApplications      #-}
+{-# LANGUAGE UndecidableInstances  #-} -- for my show instance.
+
 module Fields where
 
 import Control.Lens ((&))
@@ -23,6 +26,8 @@ import Composite.Aeson
 import qualified Composite.Aeson as CAS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Aeson as AS
+import Data.Monoid ((<>))
+import qualified Data.List as List
 import Data.Vinyl
 import Data.Proxy (Proxy(..))
 import qualified Data.Text as T
@@ -30,6 +35,7 @@ import Data.Text (Text)
 import Data.Time.Clock (UTCTime)
 import qualified Data.Functor.Identity as DFI
 import qualified Data.Typeable as DT
+import qualified Data.Vinyl.Core as VC
 import qualified Data.Vinyl.Functor as VF
 import qualified Data.Vinyl.TypeLevel as VT
 import GHC.Generics (Generic)
@@ -41,12 +47,24 @@ import Prelude hiding (FilePath)
 -- setIdentity = VF.Identity
 
 -- had to move to this Identity to work w/ composite aeson stuff?
--- but I think it screwed up my show instance as it shows "Identity" now for each field
+-- but annoying it shows explicit "Identity" (as 'show' for VF.Identity is empty)
 type Record = Rec DFI.Identity
 getIdentity = DFI.runIdentity
 setIdentity = DFI.Identity
 
-
+instance {-# OVERLAPS #-} VT.RecAll DFI.Identity rs Show => Show (Record rs) where
+  show xs =
+    (\str -> str <> " &: Nil") .
+    List.intercalate " &: " .
+    recordToList .
+    rmap
+      (\(VF.Compose (Dict x)) ->
+         VF.Const $
+         (let str = (show x)
+          in case List.stripPrefix "Identity " str of
+               Just a -> a
+               Nothing -> str)) $
+    reifyConstraint (Proxy :: Proxy Show) xs
 
 pattern Nil :: Rec f '[]
 pattern Nil = RNil
@@ -77,7 +95,7 @@ fcast = rcast
 (&:) :: r -> Record rs -> Record (r : rs)
 e &: rs = fcons e rs
 infixr 5 &:
-
+  
 newtype DBPath = DBPath String deriving (Show, Generic)
 instance Wrapped DBPath
 
