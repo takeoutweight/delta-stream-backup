@@ -14,7 +14,7 @@
 {-# LANGUAGE DataKinds #-}
 
 {-# LANGUAGE TypeApplications      #-}
-{-# LANGUAGE UndecidableInstances  #-} -- for my show instance.
+{-# LANGUAGE UndecidableInstances  #-} -- for my show instance for Record
 
 module Fields where
 
