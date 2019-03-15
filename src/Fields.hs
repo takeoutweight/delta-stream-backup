@@ -104,18 +104,6 @@ infixr 5 &:
 fconsPrecedence ::  Int
 fconsPrecedence = 5
 
-newtype DBPath = DBPath String deriving (Show, Generic)
-instance Wrapped DBPath
-
--- | Location is a place where a tree of files canbe located (i.e. not the
--- location of a particular file). It is a hostname and a path to the root, like
--- Nathans-MacBook-Pro-2.local/Users/nathan/backup/loc1/. Prepended w/o host to
--- RelativePath for an absolute path.
-newtype Location = Location Text deriving (Show, Generic, Eq, Ord)
-instance Wrapped Location
-instance AS.ToJSON Location
-instance AS.FromJSON Location
-
 instance forall a rs. (DT.Typeable a, CAS.RecordToJsonObject rs) => CAS.RecordToJsonObject (a : rs) where
   recordToJsonObject (CAS.ToField aToField :& fs) (DFI.Identity loc :& as) =
     maybe id (HM.insert (T.pack (show (DT.typeRep (Proxy :: Proxy a))))) (aToField loc) $
@@ -132,6 +120,18 @@ instance ( Wrapped a
          ) =>
          CAS.DefaultJsonFormatRecord (a : rs) where
   defaultJsonFormatRecord = field CAS.defaultJsonFormat :& defaultJsonFormatRecord
+
+newtype DBPath = DBPath String deriving (Show, Generic)
+instance Wrapped DBPath
+
+-- | Location is a place where a tree of files canbe located (i.e. not the
+-- location of a particular file). It is a hostname and a path to the root, like
+-- Nathans-MacBook-Pro-2.local/Users/nathan/backup/loc1/. Prepended w/o host to
+-- RelativePath for an absolute path.
+newtype Location = Location Text deriving (Show, Generic, Eq, Ord)
+instance Wrapped Location
+instance AS.ToJSON Location
+instance AS.FromJSON Location
 
 -- | AbsPath is the entire real filesystem path (path to location root in
 -- Location + relative path from that location root).  What command line tools
