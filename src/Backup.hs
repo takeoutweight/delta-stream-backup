@@ -33,6 +33,7 @@ import Logic
 import MirrorChanges
 import CopyCommands
 import IngestPath
+import Protocol
 
 -- eg
 -- view $ (filterRegularFiles (lstree "src")) >>= shasum

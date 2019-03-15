@@ -19,9 +19,6 @@
 module Query where
 
 import qualified Control.Exception as CE
-import qualified Composite.Aeson as CAS
-import qualified Data.Aeson as AS
-import qualified Data.Aeson.BetterErrors as ASBE
 import qualified Data.Either.Combinators as E
 import Data.Text (Text)
 import Data.Typeable (Typeable)
@@ -55,20 +52,6 @@ type FileStateF
              , Canonical
              , Actual
              , FileDetailsR]
-
-fileStateFormat :: CAS.JsonFormat e FileStateF
-fileStateFormat = CAS.recordJsonFormat CAS.defaultJsonFormatRecord
-
-instance CAS.DefaultJsonFormat FileStateF where
-  defaultJsonFormat = fileStateFormat
-
--- CAS.toJsonWithFormat fileStateFormat (Location "here" &: Nil)
--- AS.encode (CAS.toJsonWithFormat fileStateFormat (Location "here" &: Nil))
--- BSL.putStrLn (AS.encode (CAS.toJsonWithFormat CAS.defaultJsonFormat fs))
--- let Just val = (AS.decode "{\"Location\":\"here\"}" :: Maybe Value)
--- (AS.decode "{\"Location\":\"here\"}" :: Maybe Value) & fmap (ASBE.parseValue (CAS.fromJsonWithFormat fileStateFormat))
--- let Right val = (ASBE.parse (CAS.fromJsonWithFormat fileStateFormat) "{\"FileStateIdF\":3, \"Location\":\"here\"}")
-
 
 data BadDBEncodingException = BadDBEncodingException
   { table :: !Text
