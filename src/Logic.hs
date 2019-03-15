@@ -105,6 +105,13 @@ getFileStateById conn fileStateID =
   (DB.runSelectOne conn (select (allFileStates `qGuard` hasID fileStateID))) &
   fmap (fmap unFileState)
 
+getFileStateBySeq :: SQ.Connection -> MirroredSource -> IO (Maybe FileStateF)
+getFileStateBySeq conn (MirroredSource (Location loc) (SequenceNumber seq)) =
+  (DB.runSelectOne
+     conn
+     (select (allFileStates `qGuard` (locationIs loc) `qGuard` (sequenceIs seq)))) &
+  fmap (fmap unFileState)
+
 getActualFileState ::
      (Has SQ.Connection rs, Has AbsPathText rs)
   => Record rs
@@ -152,22 +159,3 @@ toAbsolute :: (Has Location r, Has RelativePathText r) => Record r -> Text
 toAbsolute ctx =
   let (host, root) = (T.breakOn "/" (nget Location ctx))
   in root <> (nget RelativePathText ctx)
-
--- | Follow mirror provenance and return as a list.
--- Throws FSNotFoundException if any of the provenance pointers can't be resolved (this should not happen)
--- FIXME: Will infinitely loop if somehow a loop has created in the db.
-provenanceChain :: SQ.Connection -> Int -> IO [FileStateF]
-provenanceChain conn fileStateID = do
-  fs <- (getFileStateById conn fileStateID)
-  (case fs of
-     Nothing ->
-       (CE.throw
-          (FSNotFoundException
-             fileStateID
-             "Can't find fileState in getIngestionFS"))
-     Just fs ->
-       (case (fget fs) of
-          Ingested -> return [fs]
-          Mirrored id' -> do
-            rest <- (provenanceChain conn id')
-            return ([fs] ++ rest)))

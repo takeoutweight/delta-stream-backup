@@ -67,17 +67,14 @@ data AlteredRelativeCp = AlteredRelativeCp
 
 data CopyEntry = CopySharedRelative SharedRelativeCp | CopyAlteredRelative AlteredRelativeCp
 
--- | Follow Mirrored provenance links until we find a canonical source
-getFirstCanonicalProvenance :: SQ.Connection -> Int -> IO (Maybe FileStateF)
-getFirstCanonicalProvenance conn fileStateID = do
-  provChain <- provenanceChain conn fileStateID
+-- | Return the immediate provenance source, if it's canonical
+getCanonicalProvenance :: SQ.Connection -> MirroredSource -> IO (Maybe FileStateF)
+getCanonicalProvenance conn source = do
+  source <- getFileStateBySeq conn source
   return
-    (List.find
-       (\fs ->
-          case (fget fs) of
-            Canonical -> True
-            _ -> False)
-       provChain)
+    (case (fmap fget source) of
+       Just Canonical -> source
+       _ -> Nothing)
 
 -- | Returns a list of proposed copy commands. Namely, any expected file in the
 -- db that hasn't been sha verified yet. Can propose overwrites as it doesn't
@@ -102,8 +99,8 @@ proposeCopyCmds conn = do
                       "file_state"
                       (nget FileStateIdF target)
                       "Should have provenance id defined given our query")
-               Mirrored prov_id -> do
-                 msource <- (getFirstCanonicalProvenance conn prov_id)
+               Mirrored{_mirroredPrev} -> do
+                 msource <- getCanonicalProvenance conn _mirroredPrev
                  return
                    (fmap
                       (\source ->

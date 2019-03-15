@@ -31,23 +31,12 @@ import Logic
 
 ------------ up to here
 
--- | Follow mirror provenance to find the original ingestion record
-getIngestionFS :: SQ.Connection -> Int -> IO FileStateF
-getIngestionFS conn fileStateID = do
-  provChain <- provenanceChain conn fileStateID
-  return
-    (case (List.find
-             (\fs ->
-                case (fget fs) of
-                  Ingested -> True
-                  _ -> False)
-             provChain) of
-       Nothing ->
-         (CE.throw
-            (FSNotFoundException
-               fileStateID
-               "Can't find fileState in getIngestionFS"))
-       Just fs -> fs)
+
+-- | If the statef is ingested, it's its own head.
+getMirroredHead :: FileStateF -> MirroredSource
+getMirroredHead fs = case (fget fs) of
+  Mirrored {_mirroredHead} -> _mirroredHead
+  Ingested -> MirroredSource (fget fs) (fget fs)
 
 -- | Uncontroversial copy, i.e. if the file exists on target, the existing
 --  entry's provenance was the same source.  source FileStateF MUST have an id
@@ -56,84 +45,83 @@ getIngestionFS conn fileStateID = do
 --  sequence number for detecting novelty)
 copyFileState :: SQ.Connection -> FileStateF -> Location -> IO Bool
 copyFileState conn source target =
-  let sourceId = (nget FileStateIdF source)
-  in (case fget source of
-        NonCanonical ->
-          CE.throw
-            (BadFileStateException source "Source FileState must be canonical")
-        Canonical ->
-          (do mPrevState <-
-                (getActualFileStateRelative
-                   conn
-                   target
-                   ((fget source) :: RelativePathText))
-              case mPrevState of
-                Nothing -> do
-                  sequence <- nextSequenceNumber (conn &: target &: Nil)
-                  (let nextState =
-                         (SequenceNumber sequence &: Mirrored sourceId &:
-                          CheckTime Nothing &:
-                          target &:
-                          source)
-                   in do (insertFileState
-                            conn
-                            ((AbsPathText (toAbsolute nextState)) &: nextState))
-                         return True)
+  (case fget source of
+     NonCanonical ->
+       CE.throw
+         (BadFileStateException source "Source FileState must be canonical")
+     Canonical ->
+       (do mPrevState <-
+             (getActualFileStateRelative
+                conn
+                target
+                ((fget source) :: RelativePathText))
+           case mPrevState of
+             Nothing -> do
+               sequence <- nextSequenceNumber (conn &: target &: Nil)
+               (let nextState =
+                      (SequenceNumber sequence &:
+                       Mirrored
+                       { _mirroredHead = getMirroredHead source
+                       , _mirroredPrev =
+                           MirroredSource (fget source) (fget source)
+                       } &:
+                       CheckTime Nothing &:
+                       target &:
+                       source)
+                in do (insertFileState
+                         conn
+                         ((AbsPathText (toAbsolute nextState)) &: nextState))
+                      return True)
                  -- copy over if uncontroversial, Possibly mark existing record as historical etc.
                  -- Q: Cleaner if we enforced all values from a DB would DEFINITELY have an id?
-                Just prevState ->
-                  let targetId = (nget FileStateIdF prevState)
-                  in (do sourceIn <- getIngestionFS conn sourceId
-                         targetIn <- getIngestionFS conn targetId
-                           -- "Noncontroversial" or not. The source ingestion point can update its own files w/o concern.
-                         case (((fget sourceIn :: Location) ==
-                                (fget targetIn :: Location)))
-                             -- Q: properly log a warning message that we're not propagating a change?
-                               of
-                           False -> do
-                             Turtle.echo
-                               (Turtle.repr
-                                  ("Error: Not propagating, different ingestion location " ++
-                                   (show source) ++
-                                   ", sourceIn" ++
-                                   (show sourceIn) ++
-                                   ", targetIn" ++ (show targetIn)))
-                             return False
-                           True ->
-                             let sourceSeq = nget SequenceNumber sourceIn
-                                 targetSeq = nget SequenceNumber targetIn
-                             in case compare sourceSeq targetSeq of
-                                  LT -> do
-                                    Turtle.echo
-                                      (Turtle.repr
-                                         ("Warning: Not propagating, source is an earlier version than target " ++
-                                          (show source) ++
-                                          ", sourceIn" ++
-                                          (show sourceIn) ++
-                                          ", targetIn" ++ (show targetIn)))
-                                    return True -- Benign. but maybe indicates an upstream pull is needed.
-                                  EQ -> do
-                                    Turtle.echo
-                                      (Turtle.repr ("noop " ++ (show source))) -- REMOVEME
-                                    return True -- Benign NOOP, already copied this exact version.
-                                  GT -> do
-                                    sequence <-
-                                      nextSequenceNumber (conn &: target &: Nil)
-                                    (let nextState =
-                                           (SequenceNumber sequence &:
-                                            Mirrored sourceId &:
-                                            CheckTime Nothing &:
-                                            target &:
-                                            source)
-                                     in do (updateFileState
-                                              conn
-                                              (Historical &: prevState))
-                                           (insertFileState
-                                              conn
-                                              ((AbsPathText
-                                                  (toAbsolute nextState)) &:
-                                               nextState))
-                                           (return True)))))
+             Just oldState ->
+               let (MirroredSource sourceLoc sourceSeq) =
+                     (getMirroredHead source)
+                   (MirroredSource oldLoc oldSeq) = (getMirroredHead oldState)
+               in (case (sourceLoc == oldLoc)
+                                  -- Q: properly log a warning message that we're not propagating a change?
+                         of
+                     False -> do
+                       Turtle.echo
+                         (Turtle.repr
+                            ("Error: Not propagating, different ingestion location " ++
+                             (show source) ++ ", old " ++ (show oldState)))
+                       return False
+                     True ->
+                       case compare sourceSeq oldSeq of
+                         LT -> do
+                           Turtle.echo
+                             (Turtle.repr
+                                ("Warning: Not propagating, source is an earlier version than target " ++
+                                 (show source) ++ ", old " ++ (show oldState)))
+                           return True -- Benign. but maybe indicates an upstream pull is needed.
+                         EQ -> do
+                           Turtle.echo
+                             (Turtle.repr ("noop " ++ (show source))) -- REMOVEME
+                           return True -- Benign NOOP, already copied this exact version.
+                         GT -> do
+                           sequence <-
+                             nextSequenceNumber (conn &: target &: Nil)
+                           (let nextState =
+                                  (SequenceNumber sequence &:
+                                   Mirrored
+                                   { _mirroredHead = getMirroredHead source
+                                   , _mirroredPrev =
+                                       MirroredSource
+                                         (fget source)
+                                         (fget source)
+                                   } &:
+                                   CheckTime Nothing &:
+                                   target &:
+                                   source)
+                            in do (updateFileState
+                                     conn
+                                     (Historical &: oldState))
+                                  (insertFileState
+                                     conn
+                                     ((AbsPathText (toAbsolute nextState)) &:
+                                      nextState))
+                                  (return True)))))
 
 -- | after, not including, sequenceNumber. Sorted by sequence number.
 getChangesSince :: SQ.Connection -> Int -> Location -> IO [FileStateF]

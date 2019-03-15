@@ -43,7 +43,10 @@ data FileStateT f = FileStateT
    , _actual :: Columnar f Int
    , _canonical :: Columnar f Int
    , _provenance_type :: Columnar f Int
-   , _provenance_id :: PrimaryKey FileStateT (Nullable f)
+   , _provenance_head_location :: Columnar (Nullable f) Text
+   , _provenance_head_sequence :: Columnar (Nullable f) Int
+   , _provenance_prev_location :: Columnar (Nullable f) Text
+   , _provenance_prev_sequence :: Columnar (Nullable f) Int
   } deriving (Generic)
 
 createFileStateTable :: SQ.Query
@@ -68,8 +71,11 @@ createFileStateTable =
            , "encryption_key_id TEXT"
            , "actual INTEGER"
            , "canonical INTEGER"
-           , "provenance_type INTEGER" -- 0=MIRRRORED, 1=INGESTED, 2=UNEXPECTEDLY_CHANGED
-           , "provenance_id__file_state_id INTEGER"
+           , "provenance_type INTEGER"
+           , "provenance_head_location TEXT"
+           , "provenance_head_sequence INTEGER"
+           , "provenance_prev_location TEXT"
+           , "provenance_prev_sequence INTEGER"
            ])))
 
 type FileState = FileStateT Identity

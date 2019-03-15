@@ -126,10 +126,19 @@ unFileState fs =
   RelativePathText (_relative_path fs) &:
   Filename (_filename fs) &:
   -- Provenance
-  (case ((_provenance_type fs), (_provenance_id fs))
-         of
-     (0, FileStateId (Just pid)) -> Mirrored pid
-     (1, FileStateId Nothing) -> Ingested
+  (case ( (_provenance_type fs)
+        , (_provenance_head_location fs)
+        , (_provenance_head_sequence fs)
+        , (_provenance_prev_location fs)
+        , (_provenance_prev_sequence fs)) of
+     (0, (Just head_loc), (Just head_seq), (Just prev_loc), (Just prev_seq)) ->
+       Mirrored
+       { _mirroredHead =
+           MirroredSource (Location head_loc) (SequenceNumber head_seq)
+       , _mirroredPrev =
+           MirroredSource (Location prev_loc) (SequenceNumber prev_seq)
+       }
+     (1, Nothing, Nothing, Nothing, Nothing) -> Ingested
      _ ->
        CE.throw
          (BadDBEncodingException
@@ -207,7 +216,11 @@ isMirrored fileState = guard_ ((_provenance_type fileState) ==. val_ 0)
 
 isActual fileState = guard_ ((_actual fileState) ==. 1)
 
+isCanonical fileState = guard_ ((_canonical fileState) ==. 1)
+
 sequenceGreaterThan sequenceNumber fileState = guard_ ((_sequence_number fileState) >. val_ sequenceNumber)
+
+sequenceIs sequenceNumber fileState = guard_ ((_sequence_number fileState) ==. val_ sequenceNumber)
 
 orderByAscendingSequence query =
   (orderBy_ (\s -> (asc_ (_sequence_number s))) query)
@@ -272,12 +285,28 @@ updateFileState conn ctx =
                Actual -> 1
          , _provenance_type =
              case fget ctx of
-               Mirrored _ -> 0
+               Mirrored {} -> 0
                Ingested -> 1
-         , _provenance_id =
+         , _provenance_head_location =
              case fget ctx of
-               Mirrored i -> FileStateId (Just i)
-               Ingested -> FileStateId Nothing
+               Mirrored {_mirroredHead = (MirroredSource (Location l) _)} ->
+                 (Just l)
+               Ingested -> Nothing
+         , _provenance_head_sequence =
+             case fget ctx of
+               Mirrored {_mirroredHead = (MirroredSource _ (SequenceNumber s))} ->
+                 (Just s)
+               Ingested -> Nothing
+         , _provenance_prev_location =
+             case fget ctx of
+               Mirrored {_mirroredPrev = (MirroredSource (Location l) _)} ->
+                 (Just l)
+               Ingested -> Nothing
+         , _provenance_prev_sequence =
+             case fget ctx of
+               Mirrored {_mirroredPrev = (MirroredSource _ (SequenceNumber s))} ->
+                 (Just s)
+               Ingested -> Nothing
          })
   in (runBeamSqliteDebug
         putStrLn
@@ -304,7 +333,7 @@ insertFileState ::
 insertFileState conn ctx =
   SQ.execute
     conn
-    "INSERT INTO file_state (location, sequence_number, check_time, absolute_path, relative_path, filename, deleted, mod_time, file_size, checksum, encrypted, encryption_key_id, actual, canonical, provenance_type, provenance_id__file_state_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    "INSERT INTO file_state (location, sequence_number, check_time, absolute_path, relative_path, filename, deleted, mod_time, file_size, checksum, encrypted, encryption_key_id, actual, canonical, provenance_type, provenance_head_location, provenance_head_sequence, provenance_prev_location, provenance_prev_sequence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     (( nget Location ctx
      , nget SequenceNumber ctx
      , nget CheckTime ctx
@@ -333,10 +362,21 @@ insertFileState conn ctx =
          Historical -> 0 :: Int
          Actual -> 1 :: Int
      , case fget ctx of
-         Mirrored _ -> 0 :: Int
+         Mirrored {} -> 0 :: Int
          Ingested -> 1 :: Int
      , case fget ctx of
-         Mirrored i -> Just i
+         Mirrored {_mirroredHead = (MirroredSource (Location l) _)} -> (Just l)
+         Ingested -> Nothing
+     , case fget ctx of
+         Mirrored {_mirroredHead = (MirroredSource _ (SequenceNumber s))} ->
+           (Just s)
+         Ingested -> Nothing
+     , case fget ctx of
+         Mirrored {_mirroredPrev = (MirroredSource (Location l) _)} -> (Just l)
+         Ingested -> Nothing
+     , case fget ctx of
+         Mirrored {_mirroredPrev = (MirroredSource _ (SequenceNumber s))} ->
+           (Just s)
          Ingested -> Nothing))
 
 -- | starts at 1, which is important as 0 is the "I haven't seen anything yet"

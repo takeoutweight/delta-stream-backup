@@ -113,6 +113,8 @@ instance Wrapped DBPath
 -- RelativePath for an absolute path.
 newtype Location = Location Text deriving (Show, Generic, Eq, Ord)
 instance Wrapped Location
+instance AS.ToJSON Location
+instance AS.FromJSON Location
 
 instance forall a rs. (DT.Typeable a, CAS.RecordToJsonObject rs) => CAS.RecordToJsonObject (a : rs) where
   recordToJsonObject (CAS.ToField aToField :& fs) (DFI.Identity loc :& as) =
@@ -206,11 +208,22 @@ newtype FileStateIdF = FileStateIdF Int  deriving (Show, Generic)
 instance Wrapped FileStateIdF
 
 -- | Each location has its own sequence counter
-newtype SequenceNumber = SequenceNumber Int deriving (Show, Generic)
+newtype SequenceNumber = SequenceNumber Int deriving (Show, Generic, Eq, Ord)
 instance Wrapped SequenceNumber
+instance AS.ToJSON SequenceNumber
+instance AS.FromJSON SequenceNumber
+
+data MirroredSource = MirroredSource Location SequenceNumber deriving (Show, Generic)
+instance AS.ToJSON MirroredSource
+instance AS.FromJSON MirroredSource
 
 -- | Did this entry represent a mirror from somewhere else? Or straight-from-the-filesystem?
-data Provenance = Mirrored Int | Ingested deriving (Show, Generic)
+-- Stores both the head of the provenance chain and the immediate previous link
+data Provenance
+  = Mirrored { _mirroredHead :: MirroredSource
+             , _mirroredPrev :: MirroredSource }
+  | Ingested
+  deriving (Show, Generic)
 instance AS.ToJSON Provenance
 instance AS.FromJSON Provenance
 -- This doesn't help, as Provenance isn't Wrapped
