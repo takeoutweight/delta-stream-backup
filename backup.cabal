@@ -54,12 +54,14 @@ library
                      , time
                      , transformers
                      , turtle
+                     , servant-server
                      , singletons
                      , sqlite-simple
                      , string-combinators
                      , system-filepath
                      , unordered-containers
                      , vinyl
+                     , warp
   default-language:    Haskell2010
 
 executable backup-exe
