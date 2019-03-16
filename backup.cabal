@@ -44,6 +44,7 @@ library
                      , extra
                      , filepath
                      , hashable
+                     , http-client
                      , labels
                      , lens
                      , text
@@ -55,6 +56,7 @@ library
                      , transformers
                      , turtle
                      , servant-server
+                     , servant-client
                      , singletons
                      , sqlite-simple
                      , string-combinators
