@@ -10,6 +10,7 @@ module Protocol where
 
 import qualified Composite.Aeson as CAS
 import Control.Lens.Wrapped (Wrapped(..), op)
+import qualified Control.Monad.IO.Class as CM
 import qualified Data.Aeson as AS
 import qualified Data.Aeson.BetterErrors as ASBE
 import qualified Data.Aeson as AS
@@ -55,19 +56,26 @@ instance AS.FromJSON FileStateJson where
 
 
 type ServerAPI
-   = "api" :> "mirrorFileStates" :> SV.ReqBody '[ SV.JSON] [FileStateJson] :> SV.Post '[ SV.JSON] Int
+   = "api" :> "mirrorFileStates" :> SV.ReqBody '[ SV.JSON] ( [FileStateJson]
+                                                           , Location
+                                                           , Int) :> SV.Post '[ SV.JSON] Int
 
 serverAPI :: SV.Proxy ServerAPI
 serverAPI = SV.Proxy
 
-mirrorFileStatesHandler :: [FileStateJson] -> SV.Handler Int
-mirrorFileStatesHandler inList = do let a = (map (\(FileStateJson fs) -> (nget SequenceNumber fs)) inList)
-                                    return 3
+mirrorFileStatesHandler :: ([FileStateJson], Location, Int) -> SV.Handler Int
+mirrorFileStatesHandler (inList, target, lastSeq) = do
+  let changes = (map (op FileStateJson) inList)
+  CM.liftIO
+    (SQ.withConnection
+       "/Users/nathan/src/haskell/backup/resources/archive.sqlite"
+       (\conn -> mirrorChangesFromLocation' conn changes target lastSeq False))
 
 server :: SV.Server ServerAPI
 server = mirrorFileStatesHandler
 
 -- [{"SequenceNumber":1,"Canonical":"Canonical","Location":"Nathans-MacBook-Pro-2.local/Users/nathan/Pictures","AbsPathText":"/Users/nathan/Pictures/2013/2013-05-15/hoek.png","Actual":"Actual","RelativePathText":"2013/2013-05-15/hoek.png","FileStateIdF":1,"CheckTime":"2019-03-15T06:23:58.668+0000","FileDetailsR":{"IsEncrypted":{"tag":"Unencrypted"},"Checksum":"61fce871b635b32957b3c8c4e3c523eb2b2ac58f","FileSize":37939,"ModTime":"2013-05-15T14:52:32.000+0000"},"Provenance":{"tag":"Ingested"},"Filename":"hoek.png"}]
+-- SQ.withConnection "/Users/nathan/src/haskell/backup/resources/archive.sqlite" (\conn -> (Warp.run 8081 (application conn)))
 -- Warp.run 8081 application
 -- curl -X POST -d '[]' -H 'Accept: application/json' -H 'Content-type: application/json' http://localhost:8081/api/mirrorFileStates
 
@@ -76,7 +84,7 @@ application = SV.serve serverAPI server
 
 -- sendChanges :: SQ.Connection -> Location -> Location -> IO ()
 
-mirrorFileStatesCall :: [FileStateJson] -> SVC.ClientM Int
+mirrorFileStatesCall :: ([FileStateJson], Location, Int) -> SVC.ClientM Int
 mirrorFileStatesCall = SVC.client serverAPI
 
 -- TODO Refactor w.r.t. MirrorChanges.mirrorChangesFromLocation
@@ -88,7 +96,7 @@ mirrorFileRequest conn source@(Location sourceT) target@(Location targetT) = do
   manager' <- HTTP.newManager HTTP.defaultManagerSettings
   nextSeq <-
     SVC.runClientM
-      (mirrorFileStatesCall (map FileStateJson changes))
+      (mirrorFileStatesCall ((map FileStateJson changes), target, lastSeq))
       (SVC.mkClientEnv manager' (SVC.BaseUrl SVC.Http "localhost" 8081 ""))
   case nextSeq of
     Left err -> Turtle.echo (Turtle.repr (show err))
